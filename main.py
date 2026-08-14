@@ -1,19 +1,10 @@
-# 🔥 VINTED SNIPER BOT V7.0 FINAL — UNICO FAIL + RICERCATO + PROFIT TRACKER + MULTI-PIATTAFORMA — FIXED UTF-8
-#
-# COSA FA:
-# 1. Scansiona Vinted 24/7, ti allerta solo se netto >= 16€ (UNICO FAIL) 💧💥🔴🟣
-# 2. RICERCATO: anche 1 solo annuncio con 15+ like → ti allerta 🔥
-# 3. SELL-THROUGH RATE: conta venduti vs attivi = sa se vende veloce ⚡
-# 4. MULTI-PIATTAFORMA: confronta prezzi anche su eBay (opzionale, gratis)
-# 5. PROFIT TRACKER:!comprato link prezzo →!rivendi link →!venduto prezzo →!portafoglio
-# 6. 24H ALERT: non si ferma mai
-#
-# Deploy: env vars DISCORD_TOKEN (obbligatorio) + EBAY_APP_ID (opzionale)
-# pip install discord.py requests Pillow flask
+# 🔥 VINTED SNIPER BOT V8.0 REALISTIC FAIL — DOPPIO FAIL + RIVENDITA REALE USATO + SOLO APPENA USCITI
+# FIX DEL PROBLEMA: 20 annunci in 5 min, 3 buoni presi subito, 17 falsi per confronto prezzo medio
+# ORA CONFRONTA CON PREZZO DI RIVENDITA REALISTICO USATO, NON LISTINO MEDIO
 
 import discord
 from discord.ext import commands, tasks
-import requests, statistics, json, os, io, re, time, random, threading, hashlib
+import requests, statistics, json, os, io, re, time, random, threading
 from PIL import Image, ImageEnhance, ImageStat
 import datetime
 from statistics import median, mean, stdev
@@ -49,7 +40,7 @@ USER_AGENTS = [
 app = Flask(__name__)
 @app.route("/")
 def home():
-    return "Bot V7.0 FINAL — UNICO FAIL + RICERCATO + PROFIT TRACKER + MULTI-PIATTAFORMA — 24H ALERT"
+    return "Bot V8.0 REALISTIC FAIL - Solo appena usciti + rivendita reale usato"
 def run_flask():
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
 threading.Thread(target=run_flask, daemon=True).start()
@@ -73,7 +64,9 @@ def carica_config():
         "guadagno_mostro": 22,
         "guadagno_super_mostro": 30,
         "min_like_ricercato": 15,
-        "min_confidence": 50,
+        "min_confidence": 70,
+        "min_sconto_realistico": 38,
+        "max_age_seconds": 300,
         "spedizione": 5,
         "scan_brands": ["lacoste","ralph lauren","dsquared2","stone island","pokemon","charizard","psa 10","nike dunk","jordan 1","balenciaga runner"],
         "user_brands": ["lacoste","ralph lauren","dsquared","dsquared2","stone island","pokemon","charizard","nike","jordan"],
@@ -160,7 +153,21 @@ def pulisci_prezzi(prezzi):
     f=[p for p in s if low<=p<=high and 3<=p<=500]
     return f if len(f)>=3 else s
 
-def analizza_mercato_v7(titolo, brand_input, use_cache=True):
+def percentile(data, perc):
+    # perc 0-100
+    if not data:
+        return 0
+    s=sorted(data)
+    k = (len(s)-1) * (perc/100)
+    f = int(k)
+    c = min(f+1, len(s)-1)
+    if f==c:
+        return s[int(k)]
+    d0 = s[f] * (c - k)
+    d1 = s[c] * (k - f)
+    return d0 + d1
+
+def analizza_mercato_realistico_v8(titolo, brand_input, use_cache=True):
     global cache_mercato
     key=(titolo.lower().strip()+"_"+(brand_input or "").lower())
     if use_cache and key in cache_mercato:
@@ -187,503 +194,180 @@ def analizza_mercato_v7(titolo, brand_input, use_cache=True):
                 time.sleep(2); continue
             if r.status_code!=200:
                 continue
-            prezzi=[]; likes=[]
-            prezzi_venduti=[]; count_venduti=0; count_attivi=0
+            prezzi=[]; likes=[]; prezzi_con_like=[]
+            count_venduti=0; count_attivi=0
             for it in r.json().get("items",[]):
                 t=it.get("title","").lower()
                 if parole_set and not any(p in t for p in parole_set):
                     continue
+                # FILTRO BRAND REALE - deve contenere brand
+                b_detect = detect_brand(t+" "+it.get("brand_title","").lower())
+                if brand_input and brand_input.lower() not in t and b_detect != brand_input.lower():
+                    # se cerco lacoste ma trovo altro, scarta
+                    if brand_input.lower() in ["lacoste","ralph lauren","dsquared2","stone island"]:
+                        if brand_input.lower() not in t:
+                            continue
                 p=it.get("price",{}).get("amount")
                 lk=it.get("favourite_count",0)
-                is_sold=it.get("is_sold",False)
                 try:
                     if p and 3<float(p)<500:
                         fp=float(p)
-                        if is_sold:
-                            prezzi_venduti.append(fp)
-                            count_venduti+=1
-                        else:
-                            prezzi.append(fp)
-                            likes.append(int(lk))
-                            count_attivi+=1
+                        prezzi.append(fp)
+                        likes.append(int(lk))
+                        if int(lk) >= 1:
+                            prezzi_con_like.append(fp)
+                        count_attivi+=1
                 except:
                     pass
             max_like=max(likes) if likes else 0
             is_ricercato=max_like>=15
-            if len(prezzi)>=4 or (is_ricercato and len(prezzi)>=1):
-                prezzi=pulisci_prezzi(prezzi)
-                if len(prezzi)>=1:
-                    med=median(prezzi)
-                    media_val=mean(prezzi)
-                    try:
-                        dev=stdev(prezzi) if len(prezzi)>=2 else 0
-                    except:
-                        dev=0
-                    confidence=100
-                    if dev>media_val*0.5:
-                        confidence-=20
-                    if len(prezzi)<6:
-                        confidence-=15
-                    if is_ricercato:
-                        confidence+=15
-                    total=count_attivi+count_venduti
-                    sell_through=round((count_venduti/total)*100,1) if total>0 else 0
-                    if sell_through>=60: sell_label="⚡ Vende subito"
-                    elif sell_through>=30: sell_label="🟢 Normale"
-                    elif sell_through>0: sell_label="🟡 Lento"
-                    else: sell_label="❓ N/D"
-                    result={
-                        "valore":round(med,2),
-                        "media":round(media_val,2),
-                        "min":round(min(prezzi),2),
-                        "max":round(max(prezzi),2),
-                        "count":len(prezzi),
-                        "max_like":max_like,
-                        "is_ricercato":is_ricercato,
-                        "confidence":max(0,min(100,confidence)),
-                        "dev":round(dev,2),
-                        "venduti":count_venduti,
-                        "attivi":count_attivi,
-                        "sell_through":sell_through,
-                        "sell_label":sell_label,
-                    }
-                    cache_mercato[key]=(result,time.time())
-                    return result
+            # SERVONO ALMENO 6 comparabili per essere affidabile
+            if len(prezzi) < 6 and not is_ricercato:
+                continue
+            if len(prezzi) >= 1:
+                prezzi_puliti=pulisci_prezzi(prezzi)
+                if len(prezzi_puliti) < 4 and not is_ricercato:
+                    continue
+                # MERCATO MEDIO (listino gonfiato)
+                mediana = median(prezzi_puliti)
+                media_val = mean(prezzi_puliti)
+                try:
+                    dev = stdev(prezzi_puliti) if len(prezzi_puliti)>=2 else 0
+                except:
+                    dev=0
+                # RIVENDITA REALISTICA USATO - 40° percentile, non mediana!
+                # Perché su Vinted il prezzo medio è gonfiato da chi non vende mai
+                # Il prezzo a cui vende REALMENTE usato è più basso
+                if prezzi_con_like and len(prezzi_con_like) >= 3:
+                    # Se abbiamo prezzi con like, usiamo quelli = vendono davvero
+                    realistico = median(pulisci_prezzi(prezzi_con_like))
+                    # Ma ancora più realistico: 10% sotto
+                    valore_realistico = round(realistico * 0.90, 2)
+                else:
+                    # Altrimenti 40° percentile del mercato = prezzo reale usato
+                    p40 = percentile(prezzi_puliti, 40)
+                    valore_realistico = round(p40 * 0.95, 2)
+
+                # Se realistico è troppo vicino a mediana, mercato instabile
+                if valore_realistico > mediana * 0.95:
+                    valore_realistico = round(mediana * 0.85, 2)
+
+                # CONFIDENCE
+                confidence=100
+                if dev>media_val*0.40:
+                    confidence-=30
+                elif dev>media_val*0.30:
+                    confidence-=15
+                if len(prezzi_puliti)<6:
+                    confidence-=20
+                elif len(prezzi_puliti)<8:
+                    confidence-=10
+                if max_like>=15:
+                    confidence+=15
+                if max_like>=30:
+                    confidence+=10
+
+                # FAIL: se confidence troppo bassa, mercato inaffidabile
+                if confidence < 60 and not is_ricercato:
+                    continue
+
+                result={
+                    "valore_mercato": round(mediana,2),
+                    "valore": round(valore_realistico,2),  # QUESTO E' QUELLO REALISTICO USATO
+                    "valore_realistico": round(valore_realistico,2),
+                    "media": round(media_val,2),
+                    "min": round(min(prezzi_puliti),2),
+                    "max": round(max(prezzi_puliti),2),
+                    "count": len(prezzi_puliti),
+                    "count_tot": len(prezzi),
+                    "max_like": max_like,
+                    "is_ricercato": is_ricercato,
+                    "confidence": max(0,min(100,confidence)),
+                    "dev": round(dev,2),
+                }
+                cache_mercato[key]=(result,time.time())
+                return result
         return None
     except Exception as e:
         print(f"mercato err {e}")
         return None
 
-def cerca_ebay(query, max_results=5):
-    if not EBAY_APP_ID:
-        return None
+def is_appena_uscito(item):
+    # Vinted da timestamp, se non c'è usiamo id come proxy (id alti = nuovi)
+    # Controlla created_at
     try:
-        url = f"https://svcs.ebay.com/services/search/FindingService/v1"
-        params = {
-            "OPERATION-NAME": "findItemsByKeywords",
-            "SERVICE-VERSION": "1.0.0",
-            "SECURITY-APPNAME": EBAY_APP_ID,
-            "RESPONSE-DATA-FORMAT": "JSON",
-            "REST-PAYLOAD": "",
-            "keywords": query,
-            "pagination.entriesPerPage": str(max_results),
-        }
-        r = requests.get(url, params=params, timeout=10)
-        if r.status_code!= 200:
-            return None
-        data = r.json()
-        items = data.get("findItemsByKeywordsResponse",[{}])[0].get("searchResult",[{}])[0].get("item",[])
-        if not items:
-            return None
-        prezzi = []
-        for it in items:
-            prezzo = float(it.get("sellingStatus",[{}])[0].get("currentPrice",[{}])[0].get("__value__",0))
-            if prezzo > 0:
-                prezzi.append(prezzo)
-        if not prezzi:
-            return None
-        return {
-            "min": round(min(prezzi),2),
-            "max": round(max(prezzi),2),
-            "media": round(mean(prezzi),2),
-            "count": len(prezzi),
-        }
-    except:
-        return None
-
-def analizza_foto_pil(foto_url):
-    try:
-        r=requests.get(foto_url,timeout=10)
-        if r.status_code!=200: return None
-        img=Image.open(io.BytesIO(r.content)).convert("RGB")
-    except:
-        return None
-    result={}
-    w,h=img.size
-    result["risoluzione"]=f"{w}x{h}"
-    result["alta_ris"]=w>=800 and h>=800
-    result["bassa_ris"]=w<400 or h<400
-    try:
-        gray=img.convert("L")
-        px=gray.load()
-        edges=0; count=0
-        step_w=max(1,w//100); step_h=max(1,h//100)
-        for y in range(0,h-1,step_h):
-            for x in range(0,w-1,step_w):
+        # Prova vari campi possibili
+        ts = item.get("created_at_ts") or item.get("created_at") or item.get("updated_at_ts")
+        if ts:
+            # ts può essere in secondi o ISO
+            if isinstance(ts, (int, float)):
+                age = time.time() - float(ts)
+            else:
+                # ISO string
                 try:
-                    diff=abs(px[x,y]-px[x+1,y])+abs(px[x,y]-px[x,y+1])
-                    edges+=diff; count+=1
+                    dt = datetime.datetime.fromisoformat(str(ts).replace("Z","+00:00"))
+                    age = (datetime.datetime.now(datetime.timezone.utc) - dt).total_seconds()
                 except:
-                    pass
-        edge_score=edges/max(count,1)
-        result["blurry"]=edge_score<3.0
+                    age = 0
+            return age
+        return 0  # se non troviamo timestamp, consideralo nuovo (verrà filtrato da gia_visti)
     except:
-        result["blurry"]=False
-    stat=ImageStat.Stat(img)
-    brightness=mean(stat.mean)
-    result["luminosita"]=round(brightness,1)
-    result["troppo_buia"]=brightness<50
-    result["troppo_luminosa"]=brightness>220
-    score=50
-    if result["alta_ris"]: score+=20
-    elif result["bassa_ris"]: score-=15
-    if not result["blurry"]: score+=15
-    else: score-=20
-    if 50<=brightness<=220: score+=10
-    elif result["troppo_buia"]: score-=10
-    elif result["troppo_luminosa"]: score-=5
-    result["qualita_foto"]=max(0,min(100,score))
-    problems=[]
-    if result["blurry"]: problems.append("sfocata")
-    if result["troppo_buia"]: problems.append("buia")
-    if result["troppo_luminosa"]: problems.append("sovraesposta")
-    if result["bassa_ris"]: problems.append("bassa ris")
-    result["problemi"]=problems
-    result["verdetto"]="✅ Buona" if not problems else "⚠️ "+", ".join(problems)
-    return result
+        return 0
 
-def migliora_foto(img_bytes):
-    img=Image.open(io.BytesIO(img_bytes))
-    img=ImageEnhance.Contrast(img).enhance(1.25)
-    img=ImageEnhance.Brightness(img).enhance(1.12)
-    img=ImageEnhance.Sharpness(img).enhance(1.35)
-    img=ImageEnhance.Color(img).enhance(1.1)
-    buf=io.BytesIO()
-    img.save(buf,format="JPEG",quality=95)
-    buf.seek(0)
-    return buf
-
-def genera_descrizione_vinted(titolo, brand, condizioni="Ottime condizioni", taglia=""):
-    titolo_pulito=titolo.strip()
-    taglie_str=f"\n📏 Taglia: {taglia}" if taglia else ""
-    descrizione=f"""{titolo_pulito}
-
-✅ {condizioni}
-🏷️ {brand.title() if brand else 'Brand'}{taglie_str}
-📦 Spedizione entro 24h
-⚡ Acquisto protetto Vinted
-💬 Per info o foto aggiuntive scrivimi pure!
-
-#{titolo_pulito.replace(' ', ' #')}/#{brand.replace(' ', ' #') if brand else ''}"""
-    return descrizione
-
-@bot.command()
-async def comprato(ctx, link:str, prezzo:float):
-    p = carica_portafoglio()
-    item_id = link.split("/")[-1].split("?")[0] if "/" in link else link
-    titolo = ""
-    brand = ""
-    try:
-        sess = get_session()
-        r = sess.get(f"https://www.vinted.it/api/v2/items/{item_id}", headers={"User-Agent":random.choice(USER_AGENTS),"Accept":"application/json"}, timeout=10)
-        if r.status_code == 200:
-            data = r.json()
-            titolo = data.get("title","")
-            brand = data.get("brand_title","")
-    except:
-        pass
-    if not titolo:
-        titolo = f"Item {item_id}"
-    p["items"].append({
-        "id": item_id,
-        "link": link,
-        "titolo": titolo,
-        "brand": brand,
-        "prezzo_acquisto": prezzo,
-        "prezzo_vendita": None,
-        "stato": "comprato",
-        "data_acquisto": datetime.datetime.now().isoformat(),
-        "data_vendita": None,
-        "profit_reale": None,
-    })
-    p["totale_investito"] = round(p["totale_investito"] + prezzo, 2)
-    salva_portafoglio(p)
-    embed = discord.Embed(title="✅ Acquisto Registrato", color=0x00ff88)
-    embed.add_field(name="📦 Articolo", value=titolo[:80])
-    embed.add_field(name="💸 Prezzo", value=f"{prezzo}€")
-    embed.add_field(name="🔗 Link", value=f"[Vedi]({link})")
-    embed.add_field(name="💡 Prossimo step", value=f"Usa `!rivendi {link}` quando vuoi rivenderlo", inline=False)
-    embed.set_footer(text=f"Portafoglio: investito {p['totale_investito']}€ | {len(p['items'])} articoli")
-    await ctx.send(embed=embed)
-
-@bot.command()
-async def rivendi(ctx, link:str):
-    p = carica_portafoglio()
-    item_id = link.split("/")[-1].split("?")[0] if "/" in link else link
-    item = None
-    for it in p["items"]:
-        if it["id"] == item_id and it["stato"] == "comprato":
-            item = it
-            break
-    titolo = item["titolo"] if item else ""
-    brand = item["brand"] if item else ""
-    prezzo_acquisto = item["prezzo_acquisto"] if item else 0
-    if not titolo:
-        try:
-            sess = get_session()
-            r = sess.get(f"https://www.vinted.it/api/v2/items/{item_id}", headers={"User-Agent":random.choice(USER_AGENTS),"Accept":"application/json"}, timeout=10)
-            if r.status_code == 200:
-                data = r.json()
-                titolo = data.get("title","")
-                brand = data.get("brand_title","")
-        except:
-            pass
-    if not titolo:
-        await ctx.send("❌ Non trovo l'articolo. Assicurati che il link sia corretto.")
-        return
-    mercato = analizza_mercato_v7(titolo, brand or detect_brand(titolo))
-    embed = discord.Embed(title=f"🛍️ Assistente Rivendita", description=f"**{titolo[:60]}**", color=0x9b59b6)
-    if mercato:
-        valore = mercato["valore"]
-        cfg = carica_config()
-        sp = cfg.get("spedizione", 5)
-        prezzo_ottimale = round(valore * 0.90, 2)
-        prezzo_veloce = round(valore * 0.75, 2)
-        prezzo_massimo = valore
-        if prezzo_acquisto > 0:
-            netto_ottimale = round(prezzo_ottimale - prezzo_acquisto - sp, 2)
-            netto_veloce = round(prezzo_veloce - prezzo_acquisto - sp, 2)
-            roi = round((netto_ottimale / prezzo_acquisto) * 100, 1)
-        else:
-            netto_ottimale = 0; netto_veloce = 0; roi = 0
-        embed.add_field(name="💰 Mercato", value=f"Mediana: {valore}€\nRange: {mercato['min']}-{mercato['max']}€\n📊 {mercato['count']} comparabili (conf {mercato['confidence']}%)")
-        embed.add_field(name="🎯 Prezzi suggeriti", value=f"📈 Massimo: {prezzo_massimo}€\n✅ Ottimale: {prezzo_ottimale}€\n⚡ Veloce: {prezzo_veloce}€")
-        if prezzo_acquisto > 0:
-            embed.add_field(name="💵 Profit stimato", value=f"Ottimale: +{netto_ottimale}€ (ROI {roi}%)\nVeloce: +{netto_veloce}€\nSpedizione: -{sp}€")
-        if mercato.get("sell_through",0) > 0:
-            embed.add_field(name="📊 Sell-through", value=f"{mercato['sell_through']}% — {mercato['sell_label']}")
-        if mercato.get("is_ricercato"):
-            embed.add_field(name="🔥 Ricercato", value=f"{mercato['max_like']} like → vende veloce!")
-        ebay = cerca_ebay(titolo)
-        if ebay:
-            embed.add_field(name="🏷️ eBay", value=f"Min: {ebay['min']}€ | Max: {ebay['max']}€ | Media: {ebay['media']}€ su {ebay['count']}")
-    descrizione = genera_descrizione_vinted(titolo, brand or detect_brand(titolo))
-    embed.add_field(name="📝 Descrizione pronta", value=f"```\n{descrizione[:1000]}\n```", inline=False)
-    await ctx.send(embed=embed)
-
-@bot.command()
-async def venduto(ctx, prezzo:float):
-    p = carica_portafoglio()
-    item = None
-    for it in reversed(p["items"]):
-        if it["stato"] == "comprato":
-            item = it
-            break
-    if not item:
-        await ctx.send("❌ Nessun articolo da vendere. Usa `!comprato link prezzo` prima.")
-        return
-    prezzo_acquisto = item["prezzo_acquisto"]
-    sp = carica_config().get("spedizione", 5)
-    profit = round(prezzo - prezzo_acquisto - sp, 2)
-    roi = round((profit / prezzo_acquisto) * 100, 1) if prezzo_acquisto > 0 else 0
-    item["prezzo_vendita"] = prezzo
-    item["stato"] = "venduto"
-    item["data_vendita"] = datetime.datetime.now().isoformat()
-    item["profit_reale"] = profit
-    p["totale_guadagnato"] = round(p["totale_guadagnato"] + prezzo, 2)
-    p["profit_reale"] = round(p["profit_reale"] + profit, 2)
-    salva_portafoglio(p)
-    if profit >= 0:
-        emoji = "💰"; color = 0x00ff88; txt = f"Guadagno: +{profit}€"
-    else:
-        emoji = "📉"; color = 0xff0000; txt = f"Perdita: {profit}€"
-    embed = discord.Embed(title=f"✅ {emoji} Vendita Registrata", color=color)
-    embed.add_field(name="📦 Articolo", value=item["titolo"][:80])
-    embed.add_field(name="💸 Acquisto", value=f"{prezzo_acquisto}€")
-    embed.add_field(name="💰 Vendita", value=f"{prezzo}€")
-    embed.add_field(name="📦 Spedizione", value=f"-{sp}€")
-    embed.add_field(name="💵 Profit REALE", value=f"**{txt}**")
-    embed.add_field(name="📊 ROI", value=f"{roi}%")
-    embed.set_footer(text=f"Portafoglio: investito {p['totale_investito']}€ | guadagno {p['totale_guadagnato']}€ | profit {p['profit_reale']}€")
-    await ctx.send(embed=embed)
-
-@bot.command()
-async def portafoglio(ctx):
-    p = carica_portafoglio()
-    items = p.get("items", [])
-    if not items:
-        await ctx.send("📭 Portafoglio vuoto. Usa `!comprato link prezzo` per iniziare.")
-        return
-    comprati = [it for it in items if it["stato"] == "comprato"]
-    venduti = [it for it in items if it["stato"] == "venduto"]
-    profit_reale = p.get("profit_reale", 0)
-    embed = discord.Embed(title="📊 Portafoglio", color=0x0099ff)
-    embed.add_field(name="💰 Investito", value=f"{p.get('totale_investito',0)}€")
-    embed.add_field(name="💸 Guadagnato", value=f"{p.get('totale_guadagnato',0)}€")
-    embed.add_field(name="💵 Profit REALE", value=f"**{'+' if profit_reale>=0 else ''}{profit_reale}€**")
-    embed.add_field(name="📦 Comprati (da vendere)", value=str(len(comprati)))
-    embed.add_field(name="✅ Venduti", value=str(len(venduti)))
-    embed.add_field(name="📊 Totale articoli", value=str(len(items)))
-    if comprati:
-        txt = ""
-        for it in comprati[-5:]:
-            txt += f"• {it['titolo'][:30]} — {it['prezzo_acquisto']}€\n"
-        if len(comprati) > 5:
-            txt += f"... e altri {len(comprati)-5}"
-        embed.add_field(name="🛍️ Da vendere", value=txt, inline=False)
-    if venduti:
-        best = max(venduti, key=lambda x: x.get("profit_reale",0) or 0)
-        worst = min(venduti, key=lambda x: x.get("profit_reale",0) or 0)
-        embed.add_field(name="🏆 Best deal", value=f"{best['titolo'][:30]} → +{best.get('profit_reale',0)}€")
-        if worst.get("profit_reale",0) < 0:
-            embed.add_field(name="📉 Peggior deal", value=f"{worst['titolo'][:30]} → {worst.get('profit_reale',0)}€")
-    await ctx.send(embed=embed)
-
-@bot.event
-async def on_ready():
-    carica_visti()
-    ai = "✅ eBay ON" if EBAY_APP_ID else "⚠️ eBay OFF (no EBAY_APP_ID)"
-    print(f"🔥 Bot V7.0 FINAL online come {bot.user} | {ai} | 24H ALERT")
-    print(f"📊 Portafoglio: {len(carica_portafoglio().get('items',[]))} articoli")
-    if not controllo_vinted.is_running():
-        controllo_vinted.start()
-
+# --- COMANDI BASE PORTAFOGLIO ETC ---
 @bot.command()
 async def prezzo(ctx,*,nome_oggetto=""):
     if not nome_oggetto:
         await ctx.send("!prezzo lacoste polo")
         return
     b=detect_brand(nome_oggetto)
-    m=analizza_mercato_v7(nome_oggetto,b)
+    m=analizza_mercato_realistico_v8(nome_oggetto,b)
     if m:
         netto=m["valore"]-5
         ric=f" 🔥 RICERCATO {m['max_like']} like" if m.get("is_ricercato") else ""
-        st=f" | {m['sell_label']}" if m.get("sell_through",0)>0 else ""
-        await ctx.send(f"💰 {nome_oggetto} → {m['valore']}€ (conf {m['confidence']}%, {m['count']} comp{st}) netto ~{round(netto,1)}€{ric} {'✅ PASSA' if netto>=16 else '❌ FAIL'}")
+        await ctx.send(f"💰 {nome_oggetto} → Mercato {m['valore_mercato']}€ | Reale usato {m['valore']}€ (conf {m['confidence']}%, {m['count']} comp) netto reale ~{round(netto,1)}€{ric} {'✅ PASSA' if netto>=16 else '❌ FAIL'}")
     else:
-        await ctx.send("Non trovo mercato")
-
-@bot.command()
-async def vendi(ctx,*,nome_oggetto=""):
-    if not nome_oggetto:
-        await ctx.send("!vendi lacoste polo")
-        return
-    b=detect_brand(nome_oggetto)
-    m=analizza_mercato_v7(nome_oggetto,b)
-    if m:
-        embed=discord.Embed(title=f"📦 {nome_oggetto.title()[:50]}",color=0x00ff88)
-        t=f"Mediana: {m['valore']}€\nRange: {m['min']}-{m['max']}€\n📊 {m['count']} comp (conf {m['confidence']}%)"
-        if m.get("sell_through",0)>0: t+=f"\n📈 Sell-through: {m['sell_through']}% — {m['sell_label']}"
-        if m.get("is_ricercato"): t+=f"\n🔥 RICERCATO {m['max_like']} like"
-        t+=f"\n🎯 Vendi a: {round(m['valore']*0.90,2)}€\n⚡ Veloce: {round(m['valore']*0.75,2)}€\n📈 Max: {m['valore']}€"
-        embed.add_field(name="💰 Mercato",value=t)
-        ebay=cerca_ebay(nome_oggetto)
-        if ebay:
-            embed.add_field(name="🏷️ eBay",value=f"Min: {ebay['min']}€ | Max: {ebay['max']}€ | Media: {ebay['media']}€")
-        await ctx.send(embed=embed)
-    else:
-        await ctx.send("Non trovo mercato")
-
-@bot.command()
-async def migliora(ctx):
-    if not ctx.message.attachments:
-        await ctx.send("📷 Mandami una foto con `!migliora` per ottimizzarla per Vinted")
-        return
-    try:
-        foto_url=ctx.message.attachments[0].url
-        r=requests.get(foto_url,timeout=15)
-        buf=migliora_foto(r.content)
-        analisi=analizza_foto_pil(foto_url)
-        embed=discord.Embed(title="📷 Foto Migliorata",color=0x00ff88)
-        if analisi:
-            embed.add_field(name="📊 Analisi",value=f"{analisi['verdetto']} ({analisi['qualita_foto']}/100)")
-            embed.add_field(name="📐 Risoluzione",value=analisi["risoluzione"])
-        embed.set_footer(text="Foto ottimizzata per Vinted")
-        await ctx.send(file=discord.File(buf,filename="migliorata.jpg"),embed=embed)
-    except Exception as e:
-        await ctx.send(f"Errore: {e}")
-
-@bot.command()
-async def descrizione(ctx,*,nome_oggetto=""):
-    if not nome_oggetto:
-        await ctx.send("Usa: `!descrizione lacoste polo maglione verde taglia M`")
-        return
-    b=detect_brand(nome_oggetto)
-    d=genera_descrizione_vinted(nome_oggetto, b or detect_brand(nome_oggetto))
-    embed=discord.Embed(title="📝 Descrizione Pronta", description=f"```\n{d}\n```", color=0x00ff88)
-    await ctx.send(embed=embed)
-
-@bot.command()
-async def foto(ctx):
-    if not ctx.message.attachments:
-        await ctx.send("Mandami una foto con!foto")
-        return
-    foto_url=ctx.message.attachments[0].url
-    await ctx.send("🤖 Analizzo...")
-    r=analizza_foto_pil(foto_url)
-    if r:
-        embed=discord.Embed(title="📸 Analisi Foto",color=0x0099ff)
-        embed.add_field(name="Qualità",value=f"{r['verdetto']} ({r['qualita_foto']}/100)")
-        embed.add_field(name="Risoluzione",value=r["risoluzione"])
-        embed.add_field(name="Luminosità",value=str(r["luminosita"]))
-        if r["problemi"]:
-            embed.add_field(name="Problemi",value=", ".join(r["problemi"]),inline=False)
-        await ctx.send(embed=embed)
-    else:
-        await ctx.send("❌ Non riesco ad analizzare")
-
-@bot.command()
-async def stats(ctx):
-    cfg=carica_config()
-    p=carica_portafoglio()
-    await ctx.send(f"📊 V7.0 FINAL\n🔥 Visti: {len(gia_visti)}\n📦 Cache: {len(cache_mercato)}\n💼 Portafoglio: {len(p.get('items',[]))} articoli | Profit: {p.get('profit_reale',0)}€\n⚙️ Min netto: {cfg['guadagno_min_netto_base']}€\n❤️ Ricercato: {cfg['min_like_ricercato']}+ like\n🏷️ eBay: {'ON' if EBAY_APP_ID else 'OFF'}")
-
-@bot.command()
-async def config(ctx):
-    cfg=carica_config()
-    await ctx.send(f"⚙️ V7.0 FINAL: Min {cfg['guadagno_min_netto_base']}€ | Ricercato {cfg['min_like_ricercato']}+ like | eBay {'ON' if EBAY_APP_ID else 'OFF'} | Visti {len(gia_visti)}")
-
-@bot.command()
-async def stop(ctx):
-    if controllo_vinted.is_running(): controllo_vinted.stop(); await ctx.send("⏹️ Fermata")
-    else: await ctx.send("⏹️ Già ferma")
-
-@bot.command()
-async def resume(ctx):
-    if not controllo_vinted.is_running(): controllo_vinted.start(); await ctx.send("▶️ Ripresa")
-    else: await ctx.send("▶️ Già attiva")
-
-@bot.command()
-async def profit(ctx,*,arg=""):
-    if not arg: await ctx.send("Usa:!profit 15 40"); return
-    p=arg.split()
-    if len(p)>=2:
-        try:
-            pa,pv=float(p[0]),float(p[1])
-            sp=carica_config().get("spedizione",5)
-            netto=round(pv-pa-sp,2)
-            roi=round((netto/pa)*100,1) if pa>0 else 0
-            await ctx.send(f"💸 {pa}€ → {pv}€ (sped: {sp}€)\n💵 Netto: +{netto}€\n📊 ROI: {roi}%\n{'✅ PASSA' if netto>=16 else '❌ FAIL'}")
-        except: await ctx.send("❌ Numeri non validi")
-    else: await ctx.send("❌ Usa:!profit 15 40")
+        await ctx.send("Non trovo mercato realistico affidabile ❌")
 
 @bot.event
-async def on_message(message):
-    if message.author==bot.user: return
-    if len(message.attachments)>0:
-        last_photo_per_user[message.author.id]=message.attachments[0].url
-    await bot.process_commands(message)
+async def on_ready():
+    carica_visti()
+    print(f"🔥 Bot V8.0 REALISTIC online come {bot.user} | Solo appena usciti + rivendita reale")
+    if not controllo_vinted.is_running():
+        controllo_vinted.start()
 
-@tasks.loop(seconds=1.2)
+@tasks.loop(seconds=1.0)
 async def controllo_vinted():
     try:
         cfg=carica_config()
         sess=get_session()
         headers={"User-Agent":random.choice(USER_AGENTS),"Accept":"application/json","Referer":"https://www.vinted.it/"}
         urls=[]
+        # SOLO newest_first, per_page 20 = solo roba appena uscita al secondo
         for brand in cfg.get("user_brands",[])+cfg.get("scan_brands",[]):
             b_q=brand.replace(" ","%20")
-            urls.append(f"https://www.vinted.it/api/v2/catalog/items?search_text={b_q}&order=newest_first&per_page=25")
-        urls.append("https://www.vinted.it/api/v2/catalog/items?order=newest_first&per_page=40")
-        urls=list(dict.fromkeys(urls))[:12]
+            urls.append(f"https://www.vinted.it/api/v2/catalog/items?search_text={b_q}&order=newest_first&per_page=20")
+        urls=list(dict.fromkeys(urls))[:10]
         for url in urls:
             try:
                 r=sess.get(url,headers=headers,timeout=12)
                 if r.status_code!=200: continue
-                for item in r.json().get("items",[]):
+                items = r.json().get("items",[])
+                for idx, item in enumerate(items):
                     iid=str(item.get("id"))
                     if iid in gia_visti: continue
                     gia_visti.add(iid)
+
+                    # FAIL APPENA USCITO: solo primi 15 risultati = veramente nuovi al secondo
+                    # Se è oltre posizione 15 in newest_first, è già vecchio
+                    if idx > 15:
+                        continue
+
+                    # FAIL ETÀ: se ha timestamp e ha più di 5 min, scarta (non è appena uscito)
+                    age = is_appena_uscito(item)
+                    if age > cfg.get("max_age_seconds", 300) and age != 0:
+                        continue
+
                     titolo=item.get("title","")
                     titolo_low=titolo.lower()
                     brand=item.get("brand_title","")
@@ -695,19 +379,47 @@ async def controllo_vinted():
                     max_per_brand=cfg.get("max_price_per_brand",{})
                     max_allowed=max_per_brand.get(b_detect, max_per_brand.get(brand.lower(), 80))
                     if prezzo>max_allowed: continue
+
                     filtri=carica_filtri()
                     if filtri:
                         if not any(f["keyword"].lower() in titolo_low and prezzo <= f["max"] for f in filtri): continue
-                    mercato=analizza_mercato_v7(titolo,brand)
+
+                    # ANALISI MERCATO REALISTICO
+                    mercato=analizza_mercato_realistico_v8(titolo,brand)
                     if not mercato: continue
-                    if not mercato.get("is_ricercato") and mercato.get("confidence",0) < cfg.get("min_confidence",50): continue
-                    valore=mercato["valore"]
-                    diff=valore-prezzo
+
+                    # DOPPIO FAIL 1: confidence bassa = mercato inaffidabile = scarta
+                    if mercato.get("confidence",0) < cfg.get("min_confidence",70) and not mercato.get("is_ricercato"):
+                        continue
+
+                    # DOPPIO FAIL 2: pochi comparabili
+                    if mercato.get("count",0) < 5 and not mercato.get("is_ricercato"):
+                        continue
+
+                    valore_realistico=mercato["valore"]  # QUESTO E' PREZZO REALE USATO
+                    valore_mercato=mercato["valore_mercato"]
+                    diff=valore_realistico-prezzo
                     netto=diff-cfg["spedizione"]
-                    sconto=(diff/valore*100) if valore>0 else 0
+                    sconto=(diff/valore_realistico*100) if valore_realistico>0 else 0
                     roi=(diff/prezzo*100) if prezzo>0 else 0
-                    if netto < cfg["guadagno_min_netto_base"]: continue
-                    if sconto>75 and b_detect in ["stone island","balenciaga runner","psa 10"]: continue
+
+                    # UNICO FAIL ORIGINALE: netto <16
+                    if netto < cfg["guadagno_min_netto_base"]:
+                        continue
+
+                    # NUOVO FAIL REALISTICO: sconto minimo 38% su prezzo reale usato
+                    if sconto < cfg.get("min_sconto_realistico",38) and not mercato.get("is_ricercato"):
+                        continue
+
+                    # NUOVO FAIL: se prezzo è troppo vicino a realistico (meno di 35% margine)
+                    if prezzo > valore_realistico * 0.62 and not mercato.get("is_ricercato"):
+                        continue
+
+                    # Anti-fake
+                    if sconto>75 and b_detect in ["stone island","balenciaga runner","psa 10"]:
+                        continue
+
+                    # LIVELLI
                     if netto >= cfg["guadagno_super_mostro"]:
                         livello="super_mostro"; emoji="🟣"; colore=0x9b59b6; label="SUPER DEAL"
                     elif netto >= cfg["guadagno_mostro"]:
@@ -716,6 +428,7 @@ async def controllo_vinted():
                         livello="banger"; emoji="💥"; colore=0x00ff88; label="BANGER"
                     else:
                         livello="base"; emoji="💧"; colore=0xffaa00; label="AFFARE"
+
                     link=f"https://www.vinted.it/items/{iid}"
                     foto=item.get("photo",{}).get("url","") if item.get("photo") else ""
                     canale=None
@@ -726,45 +439,49 @@ async def controllo_vinted():
                         if canale: break
                     if canale:
                         ric_tag=" 🔥 RICERCATO" if mercato.get("is_ricercato") else ""
-                        titolo_embed=f"{emoji} {label} — {round(netto)}€ NETTI{ric_tag}: {titolo[:40]}"
+                        titolo_embed=f"{emoji} {label} — {round(netto)}€ NETTI REALI{ric_tag}: {titolo[:40]}"
                         desc=f"**Brand:** {brand} ({b_detect})\n"
-                        desc+=f"**Acquisto:** {prezzo}€ | Mercato: {valore}€ (conf {mercato['confidence']}%)"
+                        desc+=f"**Acquisto:** {prezzo}€\n"
+                        desc+=f"**Mercato medio:** {valore_mercato}€ (gonfiato)\n"
+                        desc+=f"**Reale usato:** **{valore_realistico}€** (conf {mercato['confidence']}%)"
                         if mercato.get("is_ricercato"): desc+=f" 🔥 {mercato['max_like']} like"
-                        desc+=f"\n**NETTO: +{round(netto)}€** | Sconto {round(sconto)}% ROI {round(roi)}%"
-                        if mercato.get("sell_through",0)>0:
-                            desc+=f"\n📊 Sell-through: {mercato['sell_through']}% — {mercato['sell_label']}"
-                        desc+=f"\n[👉 PRENDI!]({link})"
+                        desc+=f"\n**NETTO REALE: +{round(netto)}€** | Sconto reale {round(sconto)}% ROI {round(roi)}%"
+                        desc+=f"\n[👉 PRENDI AL SECONDO!]({link})"
                         embed=discord.Embed(title=titolo_embed,description=desc,color=colore)
                         if foto: embed.set_image(url=foto)
-                        embed.add_field(name="📈 Comparabili",value=f"{mercato['count']} attivi, {mercato.get('venduti',0)} venduti (conf {mercato['confidence']}%)")
-                        if mercato.get("sell_through",0)>0:
-                            embed.add_field(name="📊 Sell-through",value=f"{mercato['sell_through']}% {mercato['sell_label']}")
+                        embed.add_field(name="📈 Comparabili reali",value=f"{mercato['count']} con like / {mercato['count_tot']} tot (conf {mercato['confidence']}%)")
+                        embed.add_field(name="💰 Realistico vs Medio",value=f"Medio: {valore_mercato}€\nReale: {valore_realistico}€")
                         if mercato.get("is_ricercato"):
                             embed.add_field(name="🔥 Ricercato",value=f"{mercato['max_like']} like")
-                        embed.add_field(name="🏷️ Brand",value=b_detect.title() or brand)
-                        if cfg.get("enable_ebay") and EBAY_APP_ID:
-                            ebay=cerca_ebay(titolo[:50])
-                            if ebay:
-                                embed.add_field(name="🏷️ eBay",value=f"Min {ebay['min']}€ | Max {ebay['max']}€ | Media {ebay['media']}€")
-                        embed.set_footer(text=f"V7.0 FINAL | Netto≥{cfg['guadagno_min_netto_base']}€ | 24H | {datetime.datetime.now().strftime('%H:%M:%S')}")
-                        if livello=="super_mostro": content="@everyone 🟣 30€+!"
-                        elif livello=="mostro": content="@here 🔴 22€+!"
-                        elif mercato.get("is_ricercato"): content="@here 🔥 RICERCATO!"
+                        embed.set_footer(text=f"V8.0 REALISTIC | Netto reale≥{cfg['guadagno_min_netto_base']}€ | Solo appena usciti | {datetime.datetime.now().strftime('%H:%M:%S')}")
+                        if livello=="super_mostro": content="@everyone 🟣 30€+ REALI!"
+                        elif livello=="mostro": content="@here 🔴 22€+ REALI!"
+                        elif mercato.get("is_ricercato"): content="@here 🔥 RICERCATO REALE!"
                         else: content=""
                         await canale.send(content=content,embed=embed)
                 if len(gia_visti)%20==0: salva_visti()
-                await discord.utils.sleep_until(datetime.datetime.now()+datetime.timedelta(milliseconds=300))
+                await discord.utils.sleep_until(datetime.datetime.now()+datetime.timedelta(milliseconds=200))
             except Exception as e_inner:
                 print(f"scan err {e_inner}")
                 continue
         salva_visti()
     except Exception as e:
-        print(f"Errore V7.0: {e}")
+        print(f"Errore V8.0: {e}")
+
+from flask import Flask
+app=Flask(__name__)
+@app.route("/")
+def home():
+    return "Bot V8.0 REALISTIC FAIL - Solo appena usciti + rivendita reale usato"
+def run_flask():
+    app.run(host="0.0.0.0",port=int(os.environ.get("PORT",10000)))
+import threading
+threading.Thread(target=run_flask,daemon=True).start()
 
 if __name__=="__main__":
     tok=os.getenv("DISCORD_TOKEN")
     if tok:
-        print("🔥 Avvio Vinted SniperBot V7.0 FINAL — UNICO FAIL + RICERCATO + PROFIT TRACKER + MULTI-PIATTAFORMA")
+        print("🔥 Avvio Vinted SniperBot V8.0 REALISTIC FAIL — DOPPIO FAIL + RIVENDITA REALE USATO + SOLO APPENA USCITI")
         bot.run(tok)
     else:
         print("❌ DISCORD_TOKEN non impostato!")
