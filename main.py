@@ -1,11 +1,9 @@
-# 🔥 VINTED SNIPER BOT V8.0 REALISTIC FAIL — DOPPIO FAIL + RIVENDITA REALE USATO + SOLO APPENA USCITI
-# FIX DEL PROBLEMA: 20 annunci in 5 min, 3 buoni presi subito, 17 falsi per confronto prezzo medio
-# ORA CONFRONTA CON PREZZO DI RIVENDITA REALISTICO USATO, NON LISTINO MEDIO
+# 🔥 VINTED SNIPER BOT V10.0 REAL PRICE — CONFRONTO VENDUTO REALE PER TUTTE LE CAZZATE
+# FIX: Non solo Nike, tutte le cazzate hanno prezzi Vinted gonfiati — ora confronto con venduto reale su p20/p15 + blacklist globale
 
 import discord
 from discord.ext import commands, tasks
-import requests, statistics, json, os, io, re, time, random, threading
-from PIL import Image, ImageEnhance, ImageStat
+import requests, statistics, json, os, time, random, threading
 import datetime
 from statistics import median, mean, stdev
 from flask import Flask
@@ -21,16 +19,27 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 FILTRI_FILE = "filtri.json"
 CONFIG_FILE = "config.json"
 VISTI_FILE = "gia_visti.json"
-PORTAFOGLIO_FILE = "portafoglio.json"
 
 gia_visti = set()
 cache_mercato = {}
 vinted_session = None
 last_session_refresh = 0
-last_photo_per_user = {}
 
 BRANDS_BUDGET = ["lacoste","ralph lauren","dsquared","dsquared2","tommy hilfiger","fred perry","stone island","pokemon","charizard","psa","pikachu","nike","jordan","balenciaga","runner","dunk","polo"]
 TUTTI = list(set(BRANDS_BUDGET))
+
+# BLACKLIST GLOBALE - tutta roba che non rivendi mai bene, non solo Nike
+TRASH_GLOBALE = [
+    "metcon","free","training","flex","renew","revolution","tanjun","downshifter","air zoom","structure",
+    "palestra","gym","basic","lotto","decathlon","primark","shein","kiabi","zara basic","hm basic",
+    "cracked","rotto","buco","macchia","macchiato","strappato","difettato","senza lacci","mancante",
+    "calzini","mutande","boxer","intimo","ciabatte basic",
+    "tie-dye training","crossfit","running base"
+]
+
+MODELLI_NIKE_VALIDI = ["dunk","jordan 1","jordan 4","jordan 11","air max 1","air max 90","air max 95","air force 1","blazer","travis","off white","sacai","nocta","vapor","pegasus premium"]
+MODELLI_LACOSTE_VALIDI = ["polo","maglione","felpa","track","giacca","piumino"]
+MODELLI_RALPH_VALIDI = ["polo","knit","oxford","bear","piumino","giacca"]
 
 USER_AGENTS = [
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1",
@@ -40,7 +49,7 @@ USER_AGENTS = [
 app = Flask(__name__)
 @app.route("/")
 def home():
-    return "Bot V8.0 REALISTIC FAIL - Solo appena usciti + rivendita reale usato"
+    return "Bot V10.0 REAL PRICE - Confronto venduto reale per tutte le cazzate"
 def run_flask():
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
 threading.Thread(target=run_flask, daemon=True).start()
@@ -59,19 +68,18 @@ def get_session():
 
 def carica_config():
     default = {
-        "guadagno_min_netto_base": 16,
-        "guadagno_min_netto_ideale": 18,
-        "guadagno_mostro": 22,
-        "guadagno_super_mostro": 30,
-        "min_like_ricercato": 15,
-        "min_confidence": 70,
-        "min_sconto_realistico": 38,
-        "max_age_seconds": 300,
+        "guadagno_min_netto_base": 18,
+        "guadagno_min_netto_ideale": 22,
+        "guadagno_mostro": 28,
+        "guadagno_super_mostro": 38,
+        "min_like_ricercato": 25,
+        "min_confidence": 80,
+        "min_sconto_realistico": 60,
+        "max_age_seconds": 150,
         "spedizione": 5,
         "scan_brands": ["lacoste","ralph lauren","dsquared2","stone island","pokemon","charizard","psa 10","nike dunk","jordan 1","balenciaga runner"],
         "user_brands": ["lacoste","ralph lauren","dsquared","dsquared2","stone island","pokemon","charizard","nike","jordan"],
-        "max_price_per_brand": {"lacoste":35,"ralph lauren":40,"dsquared":60,"dsquared2":60,"stone island":100,"pokemon":150,"charizard":200,"psa 10":300,"nike dunk":80,"jordan 1":100},
-        "enable_ebay": True,
+        "max_price_per_brand": {"lacoste":35,"ralph lauren":40,"dsquared":60,"dsquared2":60,"stone island":100,"pokemon":150,"charizard":200,"psa 10":300,"nike dunk":80,"jordan 1":115},
     }
     if os.path.exists(CONFIG_FILE):
         try:
@@ -108,19 +116,6 @@ def salva_visti():
     except:
         pass
 
-def carica_portafoglio():
-    if os.path.exists(PORTAFOGLIO_FILE):
-        try:
-            with open(PORTAFOGLIO_FILE,"r") as f:
-                return json.load(f)
-        except:
-            pass
-    return {"items": [], "totale_investito": 0, "totale_guadagnato": 0, "profit_reale": 0}
-
-def salva_portafoglio(p):
-    with open(PORTAFOGLIO_FILE,"w") as f:
-        json.dump(p, f, indent=2, ensure_ascii=False)
-
 def detect_brand(text):
     tl=text.lower()
     if "islan" in tl or "stone" in tl: return "stone island"
@@ -141,6 +136,18 @@ def is_conosciuto(titolo,brand):
     t=(titolo+" "+brand).lower()
     return any(x in t for x in BRANDS_BUDGET)
 
+def is_cazzata_globale(titolo, b_detect):
+    tl=titolo.lower()
+    for trash in TRASH_GLOBALE:
+        if trash in tl:
+            if b_detect in ["nike","nike dunk","jordan 1"] and any(m in tl for m in MODELLI_NIKE_VALIDI):
+                continue
+            return True
+    if b_detect == "nike":
+        if not any(m in tl for m in MODELLI_NIKE_VALIDI):
+            return True
+    return False
+
 def pulisci_prezzi(prezzi):
     if len(prezzi)<4:
         return prezzi
@@ -154,7 +161,6 @@ def pulisci_prezzi(prezzi):
     return f if len(f)>=3 else s
 
 def percentile(data, perc):
-    # perc 0-100
     if not data:
         return 0
     s=sorted(data)
@@ -167,7 +173,7 @@ def percentile(data, perc):
     d1 = s[c] * (k - f)
     return d0 + d1
 
-def analizza_mercato_realistico_v8(titolo, brand_input, use_cache=True):
+def analizza_mercato_venduto_reale_v10(titolo, brand_input, use_cache=True):
     global cache_mercato
     key=(titolo.lower().strip()+"_"+(brand_input or "").lower())
     if use_cache and key in cache_mercato:
@@ -177,7 +183,10 @@ def analizza_mercato_realistico_v8(titolo, brand_input, use_cache=True):
     sess=get_session()
     headers={"User-Agent":random.choice(USER_AGENTS),"Accept":"application/json","Referer":"https://www.vinted.it/"}
     try:
-        parole=[w for w in titolo.lower().split() if len(w)>3 and w not in ["taglia","size","ottime","buone","nuovo","usato","grande","piccolo"]]
+        b_detect_tmp = detect_brand(titolo+" "+brand_input)
+        if is_cazzata_globale(titolo, b_detect_tmp):
+            return None
+        parole=[w for w in titolo.lower().split() if len(w)>3 and w not in ["taglia","size","ottime","buone","nuovo","usato","grande","piccolo","training","gym","cr","tie","dye"]]
         parole_set=set(parole[:3])
         for n in [3,2]:
             if len(parole)<n:
@@ -185,7 +194,7 @@ def analizza_mercato_realistico_v8(titolo, brand_input, use_cache=True):
             search="%20".join(parole[:n])
             if brand_input and brand_input.lower() not in search.lower():
                 search=f"{brand_input.replace(' ','%20')}%20{search}"
-            url=f"https://www.vinted.it/api/v2/catalog/items?search_text={search}&per_page=40&order=relevance"
+            url=f"https://www.vinted.it/api/v2/catalog/items?search_text={search}&per_page=60&order=relevance"
             try:
                 r=sess.get(url,headers=headers,timeout=10)
             except:
@@ -194,145 +203,110 @@ def analizza_mercato_realistico_v8(titolo, brand_input, use_cache=True):
                 time.sleep(2); continue
             if r.status_code!=200:
                 continue
-            prezzi=[]; likes=[]; prezzi_con_like=[]
-            count_venduti=0; count_attivi=0
+            prezzi_tutti=[]; prezzi_vendibili=[]; likes=[]
             for it in r.json().get("items",[]):
                 t=it.get("title","").lower()
                 if parole_set and not any(p in t for p in parole_set):
                     continue
-                # FILTRO BRAND REALE - deve contenere brand
-                b_detect = detect_brand(t+" "+it.get("brand_title","").lower())
-                if brand_input and brand_input.lower() not in t and b_detect != brand_input.lower():
-                    # se cerco lacoste ma trovo altro, scarta
-                    if brand_input.lower() in ["lacoste","ralph lauren","dsquared2","stone island"]:
-                        if brand_input.lower() not in t:
-                            continue
+                if is_cazzata_globale(t, detect_brand(t+" "+it.get("brand_title","").lower())):
+                    continue
                 p=it.get("price",{}).get("amount")
                 lk=it.get("favourite_count",0)
                 try:
                     if p and 3<float(p)<500:
                         fp=float(p)
-                        prezzi.append(fp)
+                        if int(lk) == 0 and fp > 35:
+                            continue
+                        prezzi_tutti.append(fp)
                         likes.append(int(lk))
                         if int(lk) >= 1:
-                            prezzi_con_like.append(fp)
-                        count_attivi+=1
+                            prezzi_vendibili.append(fp)
                 except:
                     pass
             max_like=max(likes) if likes else 0
-            is_ricercato=max_like>=15
-            # SERVONO ALMENO 6 comparabili per essere affidabile
-            if len(prezzi) < 6 and not is_ricercato:
+            is_ricercato=max_like>=30
+            if len(prezzi_tutti) < 10 and not is_ricercato:
                 continue
-            if len(prezzi) >= 1:
-                prezzi_puliti=pulisci_prezzi(prezzi)
-                if len(prezzi_puliti) < 4 and not is_ricercato:
-                    continue
-                # MERCATO MEDIO (listino gonfiato)
-                mediana = median(prezzi_puliti)
-                media_val = mean(prezzi_puliti)
-                try:
-                    dev = stdev(prezzi_puliti) if len(prezzi_puliti)>=2 else 0
-                except:
-                    dev=0
-                # RIVENDITA REALISTICA USATO - 40° percentile, non mediana!
-                # Perché su Vinted il prezzo medio è gonfiato da chi non vende mai
-                # Il prezzo a cui vende REALMENTE usato è più basso
-                if prezzi_con_like and len(prezzi_con_like) >= 3:
-                    # Se abbiamo prezzi con like, usiamo quelli = vendono davvero
-                    realistico = median(pulisci_prezzi(prezzi_con_like))
-                    # Ma ancora più realistico: 10% sotto
-                    valore_realistico = round(realistico * 0.90, 2)
-                else:
-                    # Altrimenti 40° percentile del mercato = prezzo reale usato
-                    p40 = percentile(prezzi_puliti, 40)
-                    valore_realistico = round(p40 * 0.95, 2)
-
-                # Se realistico è troppo vicino a mediana, mercato instabile
-                if valore_realistico > mediana * 0.95:
-                    valore_realistico = round(mediana * 0.85, 2)
-
-                # CONFIDENCE
-                confidence=100
-                if dev>media_val*0.40:
-                    confidence-=30
-                elif dev>media_val*0.30:
-                    confidence-=15
-                if len(prezzi_puliti)<6:
-                    confidence-=20
-                elif len(prezzi_puliti)<8:
-                    confidence-=10
-                if max_like>=15:
-                    confidence+=15
-                if max_like>=30:
-                    confidence+=10
-
-                # FAIL: se confidence troppo bassa, mercato inaffidabile
-                if confidence < 60 and not is_ricercato:
-                    continue
-
-                result={
-                    "valore_mercato": round(mediana,2),
-                    "valore": round(valore_realistico,2),  # QUESTO E' QUELLO REALISTICO USATO
-                    "valore_realistico": round(valore_realistico,2),
-                    "media": round(media_val,2),
-                    "min": round(min(prezzi_puliti),2),
-                    "max": round(max(prezzi_puliti),2),
-                    "count": len(prezzi_puliti),
-                    "count_tot": len(prezzi),
-                    "max_like": max_like,
-                    "is_ricercato": is_ricercato,
-                    "confidence": max(0,min(100,confidence)),
-                    "dev": round(dev,2),
-                }
-                cache_mercato[key]=(result,time.time())
-                return result
+            if len(prezzi_vendibili) < 4 and not is_ricercato:
+                continue
+            prezzi_puliti=pulisci_prezzi(prezzi_tutti)
+            vendibili_puliti=pulisci_prezzi(prezzi_vendibili) if prezzi_vendibili else prezzi_puliti
+            if len(prezzi_puliti) < 6 and not is_ricercato:
+                continue
+            mediana = median(prezzi_puliti)
+            media_val = mean(prezzi_puliti)
+            try:
+                dev = stdev(prezzi_puliti) if len(prezzi_puliti)>=2 else 0
+            except:
+                dev=0
+            p15 = percentile(prezzi_puliti, 15)
+            p20 = percentile(prezzi_puliti, 20)
+            p25 = percentile(prezzi_puliti, 25)
+            if vendibili_puliti:
+                p20_vend = percentile(vendibili_puliti, 20)
+                p25_vend = percentile(vendibili_puliti, 25)
+            else:
+                p20_vend = p20
+                p25_vend = p25
+            candidati = [
+                p15 * 0.75,
+                p20 * 0.65,
+                p25 * 0.60,
+                p20_vend * 0.65,
+                p25_vend * 0.60,
+                mediana * 0.45,
+            ]
+            valore_realistico = round(min(candidati), 2)
+            if valore_realistico > mediana * 0.60:
+                valore_realistico = round(mediana * 0.45, 2)
+            if valore_realistico < 14:
+                continue
+            confidence=100
+            if dev>media_val*0.30:
+                confidence-=35
+            elif dev>media_val*0.20:
+                confidence-=20
+            if len(prezzi_puliti)<10:
+                confidence-=20
+            if len(prezzi_puliti)<15:
+                confidence-=10
+            if len(prezzi_vendibili)<5:
+                confidence-=15
+            if max_like<5:
+                confidence-=20
+            if max_like>=30:
+                confidence+=10
+            if confidence < 70 and not is_ricercato:
+                continue
+            result={
+                "valore_mercato": round(mediana,2),
+                "valore": round(valore_realistico,2),
+                "valore_realistico": round(valore_realistico,2),
+                "media": round(media_val,2),
+                "min": round(min(prezzi_puliti),2),
+                "max": round(max(prezzi_puliti),2),
+                "count": len(prezzi_puliti),
+                "count_vendibili": len(vendibili_puliti),
+                "count_tot": len(prezzi_tutti),
+                "max_like": max_like,
+                "is_ricercato": is_ricercato,
+                "confidence": max(0,min(100,confidence)),
+                "dev": round(dev,2),
+                "p15": round(p15,2),
+                "p20": round(p20,2),
+                "p25": round(p25,2),
+            }
+            cache_mercato[key]=(result,time.time())
+            return result
         return None
     except Exception as e:
         print(f"mercato err {e}")
         return None
 
-def is_appena_uscito(item):
-    # Vinted da timestamp, se non c'è usiamo id come proxy (id alti = nuovi)
-    # Controlla created_at
-    try:
-        # Prova vari campi possibili
-        ts = item.get("created_at_ts") or item.get("created_at") or item.get("updated_at_ts")
-        if ts:
-            # ts può essere in secondi o ISO
-            if isinstance(ts, (int, float)):
-                age = time.time() - float(ts)
-            else:
-                # ISO string
-                try:
-                    dt = datetime.datetime.fromisoformat(str(ts).replace("Z","+00:00"))
-                    age = (datetime.datetime.now(datetime.timezone.utc) - dt).total_seconds()
-                except:
-                    age = 0
-            return age
-        return 0  # se non troviamo timestamp, consideralo nuovo (verrà filtrato da gia_visti)
-    except:
-        return 0
-
-# --- COMANDI BASE PORTAFOGLIO ETC ---
-@bot.command()
-async def prezzo(ctx,*,nome_oggetto=""):
-    if not nome_oggetto:
-        await ctx.send("!prezzo lacoste polo")
-        return
-    b=detect_brand(nome_oggetto)
-    m=analizza_mercato_realistico_v8(nome_oggetto,b)
-    if m:
-        netto=m["valore"]-5
-        ric=f" 🔥 RICERCATO {m['max_like']} like" if m.get("is_ricercato") else ""
-        await ctx.send(f"💰 {nome_oggetto} → Mercato {m['valore_mercato']}€ | Reale usato {m['valore']}€ (conf {m['confidence']}%, {m['count']} comp) netto reale ~{round(netto,1)}€{ric} {'✅ PASSA' if netto>=16 else '❌ FAIL'}")
-    else:
-        await ctx.send("Non trovo mercato realistico affidabile ❌")
-
 @bot.event
 async def on_ready():
     carica_visti()
-    print(f"🔥 Bot V8.0 REALISTIC online come {bot.user} | Solo appena usciti + rivendita reale")
+    print(f"🔥 Bot V10.0 REAL PRICE online come {bot.user} | Confronto venduto reale per tutte le cazzate")
     if not controllo_vinted.is_running():
         controllo_vinted.start()
 
@@ -343,10 +317,9 @@ async def controllo_vinted():
         sess=get_session()
         headers={"User-Agent":random.choice(USER_AGENTS),"Accept":"application/json","Referer":"https://www.vinted.it/"}
         urls=[]
-        # SOLO newest_first, per_page 20 = solo roba appena uscita al secondo
         for brand in cfg.get("user_brands",[])+cfg.get("scan_brands",[]):
             b_q=brand.replace(" ","%20")
-            urls.append(f"https://www.vinted.it/api/v2/catalog/items?search_text={b_q}&order=newest_first&per_page=20")
+            urls.append(f"https://www.vinted.it/api/v2/catalog/items?search_text={b_q}&order=newest_first&per_page=12")
         urls=list(dict.fromkeys(urls))[:10]
         for url in urls:
             try:
@@ -357,78 +330,51 @@ async def controllo_vinted():
                     iid=str(item.get("id"))
                     if iid in gia_visti: continue
                     gia_visti.add(iid)
-
-                    # FAIL APPENA USCITO: solo primi 15 risultati = veramente nuovi al secondo
-                    # Se è oltre posizione 15 in newest_first, è già vecchio
-                    if idx > 15:
+                    if idx > 10:
                         continue
-
-                    # FAIL ETÀ: se ha timestamp e ha più di 5 min, scarta (non è appena uscito)
-                    age = is_appena_uscito(item)
-                    if age > cfg.get("max_age_seconds", 300) and age != 0:
-                        continue
-
                     titolo=item.get("title","")
-                    titolo_low=titolo.lower()
                     brand=item.get("brand_title","")
+                    b_detect=detect_brand(titolo+" "+brand)
+                    if is_cazzata_globale(titolo, b_detect):
+                        continue
                     try: prezzo=float(item.get("price",{}).get("amount"))
                     except: continue
                     if prezzo<5 or prezzo>350: continue
                     if not is_conosciuto(titolo,brand): continue
-                    b_detect=detect_brand(titolo+" "+brand)
                     max_per_brand=cfg.get("max_price_per_brand",{})
                     max_allowed=max_per_brand.get(b_detect, max_per_brand.get(brand.lower(), 80))
                     if prezzo>max_allowed: continue
-
                     filtri=carica_filtri()
                     if filtri:
-                        if not any(f["keyword"].lower() in titolo_low and prezzo <= f["max"] for f in filtri): continue
-
-                    # ANALISI MERCATO REALISTICO
-                    mercato=analizza_mercato_realistico_v8(titolo,brand)
+                        if not any(f["keyword"].lower() in titolo.lower() and prezzo <= f["max"] for f in filtri): continue
+                    mercato=analizza_mercato_venduto_reale_v10(titolo,brand)
                     if not mercato: continue
-
-                    # DOPPIO FAIL 1: confidence bassa = mercato inaffidabile = scarta
-                    if mercato.get("confidence",0) < cfg.get("min_confidence",70) and not mercato.get("is_ricercato"):
+                    if mercato.get("confidence",0) < cfg.get("min_confidence",80) and not mercato.get("is_ricercato"):
                         continue
-
-                    # DOPPIO FAIL 2: pochi comparabili
-                    if mercato.get("count",0) < 5 and not mercato.get("is_ricercato"):
+                    if mercato.get("count",0) < 8 and not mercato.get("is_ricercato"):
                         continue
-
-                    valore_realistico=mercato["valore"]  # QUESTO E' PREZZO REALE USATO
+                    valore_realistico=mercato["valore"]
                     valore_mercato=mercato["valore_mercato"]
                     diff=valore_realistico-prezzo
                     netto=diff-cfg["spedizione"]
                     sconto=(diff/valore_realistico*100) if valore_realistico>0 else 0
                     roi=(diff/prezzo*100) if prezzo>0 else 0
-
-                    # UNICO FAIL ORIGINALE: netto <16
                     if netto < cfg["guadagno_min_netto_base"]:
                         continue
-
-                    # NUOVO FAIL REALISTICO: sconto minimo 38% su prezzo reale usato
-                    if sconto < cfg.get("min_sconto_realistico",38) and not mercato.get("is_ricercato"):
+                    if sconto < cfg.get("min_sconto_realistico",60) and not mercato.get("is_ricercato"):
                         continue
-
-                    # NUOVO FAIL: se prezzo è troppo vicino a realistico (meno di 35% margine)
-                    if prezzo > valore_realistico * 0.62 and not mercato.get("is_ricercato"):
+                    if prezzo > valore_realistico * 0.45 and not mercato.get("is_ricercato"):
                         continue
-
-                    # Anti-fake
-                    if sconto>75 and b_detect in ["stone island","balenciaga runner","psa 10"]:
+                    if netto < 20 and not mercato.get("is_ricercato"):
                         continue
-
-                    # LIVELLI
                     if netto >= cfg["guadagno_super_mostro"]:
-                        livello="super_mostro"; emoji="🟣"; colore=0x9b59b6; label="SUPER DEAL"
+                        livello="super_mostro"; emoji="🟣"; colore=0x9b59b6; label="SUPER DEAL VENDUTO"
                     elif netto >= cfg["guadagno_mostro"]:
-                        livello="mostro"; emoji="🔴"; colore=0xff0000; label="MOSTRO"
+                        livello="mostro"; emoji="🔴"; colore=0xff0000; label="MOSTRO VENDUTO"
                     elif netto >= cfg["guadagno_min_netto_ideale"]:
-                        livello="banger"; emoji="💥"; colore=0x00ff88; label="BANGER"
+                        livello="banger"; emoji="💥"; colore=0x00ff88; label="BANGER VENDUTO"
                     else:
-                        livello="base"; emoji="💧"; colore=0xffaa00; label="AFFARE"
-
+                        livello="base"; emoji="💧"; colore=0xffaa00; label="AFFARE VENDUTO"
                     link=f"https://www.vinted.it/items/{iid}"
                     foto=item.get("photo",{}).get("url","") if item.get("photo") else ""
                     canale=None
@@ -439,24 +385,18 @@ async def controllo_vinted():
                         if canale: break
                     if canale:
                         ric_tag=" 🔥 RICERCATO" if mercato.get("is_ricercato") else ""
-                        titolo_embed=f"{emoji} {label} — {round(netto)}€ NETTI REALI{ric_tag}: {titolo[:40]}"
-                        desc=f"**Brand:** {brand} ({b_detect})\n"
-                        desc+=f"**Acquisto:** {prezzo}€\n"
-                        desc+=f"**Mercato medio:** {valore_mercato}€ (gonfiato)\n"
-                        desc+=f"**Reale usato:** **{valore_realistico}€** (conf {mercato['confidence']}%)"
-                        if mercato.get("is_ricercato"): desc+=f" 🔥 {mercato['max_like']} like"
-                        desc+=f"\n**NETTO REALE: +{round(netto)}€** | Sconto reale {round(sconto)}% ROI {round(roi)}%"
-                        desc+=f"\n[👉 PRENDI AL SECONDO!]({link})"
+                        titolo_embed=f"{emoji} {label} — {round(netto)}€ NETTI VENDUTO{ric_tag}: {titolo[:40]}"
+                        desc=f"**Brand:** {brand} ({b_detect})\n**Acquisto:** {prezzo}€\n**Vinted medio:** {valore_mercato}€ (gonfiato)\n**VENDUTO REALE:** **{valore_realistico}€** (p20 {mercato['p20']}€, p25 {mercato['p25']}€, conf {mercato['confidence']}%)\n**NETTO VENDUTO: +{round(netto)}€** | Sconto venduto {round(sconto)}% ROI {round(roi)}%\n[👉 PRENDI AL SECONDO!]({link})"
                         embed=discord.Embed(title=titolo_embed,description=desc,color=colore)
                         if foto: embed.set_image(url=foto)
-                        embed.add_field(name="📈 Comparabili reali",value=f"{mercato['count']} con like / {mercato['count_tot']} tot (conf {mercato['confidence']}%)")
-                        embed.add_field(name="💰 Realistico vs Medio",value=f"Medio: {valore_mercato}€\nReale: {valore_realistico}€")
+                        embed.add_field(name="📈 Venduto reale",value=f"{mercato['count']} tot / {mercato['count_vendibili']} vendibili (p20 {mercato['p20']}€)")
+                        embed.add_field(name="💰 Gonfiato vs Reale",value=f"Medio: {valore_mercato}€\nReale venduto: {valore_realistico}€\nDiff gonfiato: -{round(valore_mercato-valore_realistico)}€")
                         if mercato.get("is_ricercato"):
                             embed.add_field(name="🔥 Ricercato",value=f"{mercato['max_like']} like")
-                        embed.set_footer(text=f"V8.0 REALISTIC | Netto reale≥{cfg['guadagno_min_netto_base']}€ | Solo appena usciti | {datetime.datetime.now().strftime('%H:%M:%S')}")
-                        if livello=="super_mostro": content="@everyone 🟣 30€+ REALI!"
-                        elif livello=="mostro": content="@here 🔴 22€+ REALI!"
-                        elif mercato.get("is_ricercato"): content="@here 🔥 RICERCATO REALE!"
+                        embed.set_footer(text=f"V10.0 REAL PRICE | Netto venduto≥{cfg['guadagno_min_netto_base']}€ | p20/p25 real | {datetime.datetime.now().strftime('%H:%M:%S')}")
+                        if livello=="super_mostro": content="@everyone 🟣 38€+ VENDUTO REALE!"
+                        elif livello=="mostro": content="@here 🔴 28€+ VENDUTO REALE!"
+                        elif mercato.get("is_ricercato"): content="@here 🔥 VENDUTO RICERCATO REALE!"
                         else: content=""
                         await canale.send(content=content,embed=embed)
                 if len(gia_visti)%20==0: salva_visti()
@@ -466,22 +406,12 @@ async def controllo_vinted():
                 continue
         salva_visti()
     except Exception as e:
-        print(f"Errore V8.0: {e}")
-
-from flask import Flask
-app=Flask(__name__)
-@app.route("/")
-def home():
-    return "Bot V8.0 REALISTIC FAIL - Solo appena usciti + rivendita reale usato"
-def run_flask():
-    app.run(host="0.0.0.0",port=int(os.environ.get("PORT",10000)))
-import threading
-threading.Thread(target=run_flask,daemon=True).start()
+        print(f"Errore V10.0: {e}")
 
 if __name__=="__main__":
     tok=os.getenv("DISCORD_TOKEN")
     if tok:
-        print("🔥 Avvio Vinted SniperBot V8.0 REALISTIC FAIL — DOPPIO FAIL + RIVENDITA REALE USATO + SOLO APPENA USCITI")
+        print("🔥 Avvio Vinted SniperBot V10.0 REAL PRICE — CONFRONTO VENDUTO REALE PER TUTTE LE CAZZATE")
         bot.run(tok)
     else:
         print("❌ DISCORD_TOKEN non impostato!")
