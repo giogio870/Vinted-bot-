@@ -245,16 +245,7 @@ def analizza_mercato_venduto_reale_v10(titolo, brand_input, use_cache=True):
             if vendibili_puliti:
                 p20_vend = percentile(vendibili_puliti, 20)
                 p25_vend = percentile(vendibili_puliti, 25)
-            else:
-                p20_vend = p20
-                p25_vend = p25
-            candidati = [
-                p15 * 0.75,
-                p20 * 0.65,
-                p25 * 0.60,
-                p20_vend * 0.65,
-                p25_vend * 0.60,
-                mediana * 0.45,
+           valore_realistico = round(mediana, 2)  # niente moltiplicatori arbitrari
             ]
             valore_realistico = round(min(candidati), 2)
             if valore_realistico > mediana * 0.60:
