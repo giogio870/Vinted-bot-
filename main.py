@@ -1,8 +1,8 @@
 import discord
 from discord.ext import commands, tasks
-import requests, statistics, json, os, io
+import requests, statistics, json, os, io, re, time, random
 from PIL import Image, ImageEnhance
-import datetime, random
+import datetime
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 intents = discord.Intents.default()
@@ -13,30 +13,54 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 FILTRI_FILE = "filtri.json"
 CONFIG_FILE = "config.json"
 CHAT_FILE = "chat_storico.json"
+VISTI_FILE = "gia_visti.json"
+
 gia_visti = set()
+last_photo_per_user = {}
+cache_mercato = {}
+vinted_session = None
+last_session_refresh = 0
 
-BRANDS_LUXURY = ["balenciaga","louis vuitton","lv","gucci","prada","dior","fendi","off white","moncler","canada goose","chrome hearts"]
-BRANDS_HYPE = ["stone island","c.p. company","cp company","nike","jordan","adidas","yeezy","north face","arcteryx","carhartt","new balance","barbour","supreme","stussy","palace","trapstar","nocta","tech fleece"]
-BRANDS_CASUAL = ["lacoste","ralph lauren","tommy","levis","fred perry","lyle","dickies","patagonia","ea7","boss"]
-BRANDS_CARTE = ["pokemon","charizard","psa","pikachu","panini","funko","lego"]
+BRANDS_BUDGET = ["lacoste","ralph lauren","dsquared","dsquared2","tommy hilfiger","fred perry","stone island","pokemon","charizard","psa","pikachu","nike","jordan","balenciaga","runner","dunk","polo"]
+TUTTI = list(set(BRANDS_BUDGET))
 
-TUTTI = BRANDS_LUXURY + BRANDS_HYPE + BRANDS_CASUAL + BRANDS_CARTE + ["runner","lv skate","trainer","dunk","550","2002r","jordan 1","jordan 4"]
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1"
+]
+
+def get_session():
+    global vinted_session, last_session_refresh
+    now = time.time()
+    if vinted_session is None or (now - last_session_refresh) > 600:
+        vinted_session = requests.Session()
+        try:
+            vinted_session.get("https://www.vinted.it", headers={"User-Agent": random.choice(USER_AGENTS)}, timeout=10)
+            last_session_refresh = now
+        except:
+            pass
+    return vinted_session
 
 def carica_config():
     default = {
-        "guadagno_min_netto_base": 18,
-        "guadagno_min_netto_ideale": 20,
-        "guadagno_mostro": 25,
+        "guadagno_min_netto_base": 16,
+        "guadagno_min_netto_ideale": 18,
+        "guadagno_mostro": 22,
         "guadagno_super_mostro": 30,
-        "sconto_min": 42,
+        "sconto_min": 40,
+        "roi_min": 45,
+        "unico_fail": "netto < 16",
         "spedizione": 5,
         "autobuy": False,
-        "autobuy_min_netto": 20
+        "autobuy_min_netto": 22,
+        "scan_brands": ["lacoste","ralph lauren","dsquared2","stone island","pokemon","charizard","psa 10","nike dunk","jordan 1","balenciaga runner"],
+        "user_brands": ["lacoste","ralph lauren","dsquared","dsquared2","stone island","pokemon","charizard","nike","jordan"],
+        "max_price_per_brand": {"lacoste":35,"ralph lauren":40,"dsquared":60,"dsquared2":60,"stone island":100,"pokemon":150,"charizard":200,"psa 10":300,"nike dunk":80,"jordan 1":100}
     }
     if os.path.exists(CONFIG_FILE):
         try:
-            with open(CONFIG_FILE, "r") as f:
-                cfg = json.load(f)
+            with open(CONFIG_FILE,"r") as f:
+                cfg=json.load(f)
                 default.update(cfg)
                 return default
         except:
@@ -44,533 +68,437 @@ def carica_config():
     return default
 
 def salva_config(cfg):
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(cfg, f, indent=2)
-
-CONFIG = carica_config()
+    with open(CONFIG_FILE,"w") as f:
+        json.dump(cfg,f,indent=2)
 
 def carica_filtri():
     if os.path.exists(FILTRI_FILE):
         try:
-            with open(FILTRI_FILE, "r") as f:
+            with open(FILTRI_FILE,"r") as f:
                 return json.load(f)
         except:
             return []
     return []
 
 def salva_filtri(f):
-    with open(FILTRI_FILE, "w") as f2:
-        json.dump(f, f2, indent=2)
+    with open(FILTRI_FILE,"w") as f2:
+        json.dump(f,f2,indent=2)
 
 def carica_chat():
     if os.path.exists(CHAT_FILE):
         try:
-            with open(CHAT_FILE, "r") as f:
+            with open(CHAT_FILE,"r") as f:
                 return json.load(f)
         except:
             return {}
     return {}
 
 def salva_chat(ch):
-    with open(CHAT_FILE, "w") as f:
-        json.dump(ch, f, indent=2)
+    with open(CHAT_FILE,"w") as f:
+        json.dump(ch,f,indent=2)
 
-def is_conosciuto(titolo, brand):
-    t = (titolo + " " + brand).lower()
-    filtri = carica_filtri()
-    if filtri:
-        for fl in filtri:
-            if fl["keyword"] in t:
-                return True
-        return False
-    return any(b in t for b in TUTTI)
-
-def analizza_mercato_vendita(titolo):
-    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-    try:
-        search = "%20".join(titolo.split()[:3])
-        url = f"https://www.vinted.it/api/v2/catalog/items?search_text={search}&per_page=25"
-        r = requests.get(url, headers=headers, timeout=8)
-        prezzi = []
-        for it in r.json().get("items", []):
-            p = it.get("price", {}).get("amount")
-            try:
-                if p and float(p) > 0:
-                    prezzi.append(float(p))
-            except:
-                pass
-        if len(prezzi) < 3:
-            search2 = "%20".join(titolo.split()[:2])
-            url2 = f"https://www.vinted.it/api/v2/catalog/items?search_text={search2}&per_page=25"
-            r2 = requests.get(url2, headers=headers, timeout=7)
-            prezzi2 = [float(i.get("price",{}).get("amount")) for i in r2.json().get("items",[]) if i.get("price",{}).get("amount")]
-            if len(prezzi2) > len(prezzi):
-                prezzi = prezzi2
-        if len(prezzi) == 0:
-            return None
-        prezzi.sort()
-        pu = prezzi[2:-2] if len(prezzi) >= 8 else prezzi
-        mediana = statistics.median(pu)
-        minimo = min(pu)
-        massimo = max(pu)
-        media = statistics.mean(pu)
-        return {"valore": round(mediana,2), "media": round(media,2), "min": round(minimo,2), "max": round(massimo,2), "count": len(prezzi)}
-    except:
-        return None
-
-def analizza_mostro(titolo, brand_input):
-    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-    try:
-        search = "%20".join(titolo.split()[:3])
-        url = f"https://www.vinted.it/api/v2/catalog/items?search_text={search}&per_page=30"
-        r = requests.get(url, headers=headers, timeout=8)
-        prezzi = []
-        for it in r.json().get("items", []):
-            p = it.get("price", {}).get("amount")
-            try:
-                if p and float(p) > 0:
-                    prezzi.append(float(p))
-            except:
-                pass
-        if len(prezzi) < 3:
-            search2 = "%20".join(titolo.split()[:2])
-            url2 = f"https://www.vinted.it/api/v2/catalog/items?search_text={search2}&per_page=30"
-            r2 = requests.get(url2, headers=headers, timeout=7)
-            prezzi2 = [float(i.get("price",{}).get("amount")) for i in r2.json().get("items",[]) if i.get("price",{}).get("amount")]
-            if len(prezzi2) > len(prezzi):
-                prezzi = prezzi2
-        if len(prezzi) == 0:
-            return None
-        t_low = (titolo + " " + brand_input).lower()
-        is_lux = any(b in t_low for b in BRANDS_LUXURY + ["jordan","dunk","balenciaga runner","lv skate","charizard","psa 10"])
-        cnt = len(prezzi)
-        if cnt <= 2 and not any(b in t_low for b in TUTTI):
-            return None
-        prezzi.sort()
-        pu = prezzi[2:-2] if len(prezzi) >= 8 else prezzi
-        mediana = statistics.median(pu)
-        minimo = min(pu)
-        massimo = max(pu)
-        media = statistics.mean(pu)
+def carica_visti():
+    global gia_visti
+    if os.path.exists(VISTI_FILE):
         try:
-            dev = statistics.stdev(pu) if len(pu)>=2 else 0
-            instabile = dev > (media * 0.55)
-            if is_lux:
-                instabile = dev > (media * 0.65)
+            with open(VISTI_FILE,"r") as f:
+                gia_visti=set(json.load(f))
         except:
-            instabile = False
-        if instabile:
-            return None
-        return {"valore": round(mediana,2), "media": round(media,2), "min": round(minimo,2), "max": round(massimo,2), "count": cnt, "raro": cnt <= 3 and is_lux, "is_lux": is_lux, "confidenza_alta": cnt >= 5}
+            gia_visti=set()
+
+def salva_visti():
+    try:
+        with open(VISTI_FILE,"w") as f:
+            json.dump(list(gia_visti)[-5000:],f)
+    except:
+        pass
+
+def detect_brand(text):
+    tl=text.lower()
+    if "islan" in tl or "stone" in tl:
+        return "stone island"
+    if "dsq" in tl or "dsquared" in tl:
+        return "dsquared2"
+    if "ralph" in tl:
+        return "ralph lauren"
+    if "lacoste" in tl:
+        return "lacoste"
+    if "charizard" in tl:
+        return "charizard"
+    if "psa" in tl:
+        return "psa 10"
+    if "pokemon" in tl or "pikachu" in tl:
+        return "pokemon"
+    if "jordan" in tl:
+        return "jordan 1"
+    if "dunk" in tl:
+        return "nike dunk"
+    for b in sorted(TUTTI,key=len,reverse=True):
+        if b in tl:
+            return b
+    return ""
+
+def is_conosciuto(titolo,brand):
+    t=(titolo+" "+brand).lower()
+    return any(x in t for x in ["lacoste","ralph","dsquared","stone","pokemon","charizard","psa","pikachu","nike","jordan","balenciaga","runner","dunk","polo"])
+
+def pulisci_prezzi(prezzi):
+    if len(prezzi)<4:
+        return prezzi
+    s=sorted(prezzi)
+    q1=s[len(s)//4]
+    q3=s[(len(s)*3)//4]
+    iqr=q3-q1
+    low=q1-1.5*iqr
+    high=q3+1.5*iqr
+    f=[p for p in s if low<=p<=high and 3<=p<=500]
+    return f if len(f)>=3 else s
+
+def analizza_mercato_vendita(titolo,use_cache=True):
+    global cache_mercato
+    key=titolo.lower().strip()
+    if use_cache and key in cache_mercato:
+        data,ts=cache_mercato[key]
+        if time.time()-ts<600:
+            return data
+    sess=get_session()
+    headers={"User-Agent":random.choice(USER_AGENTS),"Accept":"application/json","Referer":"https://www.vinted.it/"}
+    try:
+        for n in [4,3,2]:
+            terms=titolo.split()
+            if len(terms)<n:
+                continue
+            search="%20".join(terms[:n])
+            url=f"https://www.vinted.it/api/v2/catalog/items?search_text={search}&per_page=40&order=relevance"
+            r=sess.get(url,headers=headers,timeout=10)
+            if r.status_code==429:
+                time.sleep(2)
+                continue
+            prezzi=[]
+            for it in r.json().get("items",[]):
+                p=it.get("price",{}).get("amount")
+                try:
+                    if p and float(p)>0:
+                        prezzi.append(float(p))
+                except:
+                    pass
+            if len(prezzi)>=4:
+                prezzi=pulisci_prezzi(prezzi)
+                result={"valore":round(statistics.median(prezzi),2),"media":round(statistics.mean(prezzi),2),"min":round(min(prezzi),2),"max":round(max(prezzi),2),"count":len(prezzi)}
+                cache_mercato[key]=(result,time.time())
+                return result
+        return None
     except:
         return None
 
-def genera_descrizione_vendita(nome_oggetto, brand_detected=""):
-    nome_lower = nome_oggetto.lower()
-    brand = brand_detected
-    for b in TUTTI:
-        if b in nome_lower:
-            brand = b
-            break
-    mercato = analizza_mercato_vendita(nome_oggetto)
-    if mercato:
-        prezzo_consigliato = mercato["valore"]
-        prezzo_veloce = round(prezzo_consigliato * 0.92, 2)
-        prezzo_massimo = round(prezzo_consigliato * 1.05, 2)
+def analizza_mostro(titolo,brand_input):
+    sess=get_session()
+    headers={"User-Agent":random.choice(USER_AGENTS),"Accept":"application/json","Referer":"https://www.vinted.it/"}
+    try:
+        search="%20".join(titolo.split()[:3])
+        url=f"https://www.vinted.it/api/v2/catalog/items?search_text={search}&per_page=35"
+        r=sess.get(url,headers=headers,timeout=10)
+        prezzi=[]
+        for it in r.json().get("items",[]):
+            p=it.get("price",{}).get("amount")
+            try:
+                if p and float(p)>0:
+                    prezzi.append(float(p))
+            except:
+                pass
+        if len(prezzi)<3:
+            search2="%20".join(titolo.split()[:2])
+            url2=f"https://www.vinted.it/api/v2/catalog/items?search_text={search2}&per_page=35"
+            r2=sess.get(url2,headers=headers,timeout=10)
+            prezzi2=[float(i.get("price",{}).get("amount")) for i in r2.json().get("items",[]) if i.get("price",{}).get("amount")]
+            if len(prezzi2)>len(prezzi):
+                prezzi=prezzi2
+        if len(prezzi)==0:
+            return None
+        prezzi=pulisci_prezzi(prezzi)
+        if not prezzi:
+            return None
+        result={"valore":round(statistics.median(prezzi),2),"media":round(statistics.mean(prezzi),2),"min":round(min(prezzi),2),"max":round(max(prezzi),2),"count":len(prezzi),"confidenza_alta":len(prezzi)>=6}
+        return result
+    except:
+        return None
+
+def genera_descrizione_vendita(nome,brand_detected=""):
+    brand=brand_detected or detect_brand(nome)
+    merc=analizza_mercato_vendita(nome)
+    if merc:
+        veloce=round(merc["valore"]*0.90,2)
+        maxp=round(merc["valore"]*1.08,2)
     else:
-        prezzo_consigliato = None
-        prezzo_veloce = None
-        prezzo_massimo = None
-    titolo_seo = nome_oggetto.title()
-    if brand and brand.lower() not in nome_lower:
-        titolo_seo = f"{brand.title()} {titolo_seo}"
-    descrizione = f"""🔥 {titolo_seo} - CONDIZIONI PERFETTE 🔥
+        veloce=maxp=None
+    titolo=nome.title()
+    if brand and brand.lower() not in nome.lower():
+        titolo=f"{brand.title()} {titolo}"
+    desc=f"🔥 {titolo} 🔥\n✅ Brand {brand.title() if brand else 'Originale'} 9/10\n📦 Spedizione 24h tracciata"
+    return {"titolo_seo":titolo,"descrizione":desc,"prezzo_veloce":veloce,"prezzo_massimo":maxp,"mercato":merc,"brand":brand}
 
-✅ Brand: {brand.title() if brand else "Vedi foto"}
-✅ Taglia: [Inserisci taglia]
-✅ Condizioni: 9/10 - Usato pochissimo, nessun difetto
-✅ Autenticità: 100% Originale
+def studia_confronto(lista):
+    ris=[]
+    for ogg in lista:
+        m=analizza_mercato_vendita(ogg)
+        if m:
+            ris.append({"nome":ogg,"mercato":m})
+    ris=sorted(ris,key=lambda x: x["mercato"]["valore"] if x["mercato"] else 0, reverse=True)
+    return ris
 
-📦 Spedizione tracciata 24h
-💨 Vendo per inutilizzo
+def risposta_chat_infinita(user_id,messaggio,ha_foto=False):
+    msg_lower=messaggio.lower().strip()
+    storico=carica_chat()
+    user_history=storico.get(str(user_id),[])
+    if messaggio.strip():
+        user_history.append({"role":"user","content":messaggio,"time":str(datetime.datetime.now())})
+    cfg=carica_config()
+    brand_det=detect_brand(messaggio)
 
-#streetwear #hype #vinted"""
-    return {"titolo_seo": titolo_seo, "descrizione": descrizione, "prezzo_consigliato": prezzo_consigliato, "prezzo_veloce": prezzo_veloce, "prezzo_massimo": prezzo_massimo, "mercato": mercato, "brand": brand}
-
-def risposta_chat_infinita(user_id, messaggio, ha_foto=False):
-    # Chat infinita - assistente reseller
-    msg_lower = messaggio.lower()
-    storico = carica_chat()
-    user_history = storico.get(str(user_id), [])
-    
-    # Salva messaggio utente
-    user_history.append({"role": "user", "content": messaggio, "time": str(datetime.datetime.now())})
-    
-    risposta = ""
-    
-    # Analizza intent
-    if any(x in msg_lower for x in ["ciao","buongiorno","buonasera","ehi","hey"]):
-        risposta = f"Ciao! 👋 Sono il tuo assistente reseller MOSTRO! \n\nPosso fare per te all'infinito:\n📦 **Vendere:** mandami foto + nome e ti faccio descrizione + prezzo\n💰 **Prezzo:** `!prezzo Stone Island` per sapere quanto vale\n📸 **Foto:** `!migliora` + foto per migliorare foto\n💥 **Affari:** ti notifico solo banger da 20€+ netti\n\nDimmi pure cosa vuoi vendere o chiedimi qualsiasi cosa su Vinted!"
-    
-    elif any(x in msg_lower for x in ["quanto vale","quanto posso","prezzo","quanto lo vendo","quanto lo metto"]):
-        # Estrai oggetto
-        oggetto = messaggio.replace("quanto vale","").replace("quanto posso vendere","").strip()
-        if len(oggetto) < 3:
-            oggetto = "oggetto"
-        mercato = analizza_mercato_vendita(oggetto if len(oggetto)>2 else "Stone Island")
-        if mercato:
-            risposta = f"💰 **{oggetto} vale {mercato['valore']}€** (range {mercato['min']}-{mercato['max']}€ su {mercato['count']} annunci)\n\nConsiglio:\n• Veloce (24-48h): **{round(mercato['valore']*0.92,2)}€**\n• Normale: **{mercato['valore']}€**\n• Massimo: **{round(mercato['valore']*1.05,2)}€**\n\nVuoi che ti faccio descrizione pronta? Scrivi `!vendi {oggetto}`"
+    if ha_foto:
+        nome=messaggio.strip() or "oggetto in foto"
+        if len(nome)<5 or any(k in msg_lower for k in ["usa quella","quella foto","vedi l'immagine","già mandata"]):
+            for h in reversed(user_history[:-1]):
+                txt=h.get("content","")
+                if len(txt)>5:
+                    nome=txt
+                    brand_det=detect_brand(txt) or brand_det
+                    break
+            if len(nome)<5:
+                nome="Lacoste polo"
+                brand_det="lacoste"
+        result=genera_descrizione_vendita(nome,brand_det)
+        merc=result.get("mercato")
+        if merc:
+            netto=merc["valore"]-25
+            risposta=f"📸 **{result['titolo_seo']}**\n💰 Vale **{merc['valore']}€** ({merc['min']}-{merc['max']}€ su {merc['count']})\n⚡ Veloce: {result['prezzo_veloce']}€ | Netto ~{round(netto,1)}€ {'✅ PASSA' if netto>=16 else '❌ UNICO FAIL <16€'}\n\nVuoi descrizione? `!vendi {nome}`"
         else:
-            risposta = "Dimmi nome preciso es: 'Stone Island felpa nera L' e ti dico prezzo al volo! Usa `!prezzo nome oggetto`"
-    
-    elif any(x in msg_lower for x in ["descrizione","descrivimi","fai descrizione","testo per vinted"]):
-        oggetto = messaggio.replace("descrizione","").replace("fai","").strip()
-        if len(oggetto) < 3:
-            oggetto = "oggetto"
-        result = genera_descrizione_vendita(oggetto)
-        risposta = f"📦 **Descrizione pronta per {result['titolo_seo']}:**\n\n```{result['descrizione'][:1000]}```\n\nTitolo SEO: `{result['titolo_seo']}`\nPrezzo consigliato: {result['prezzo_veloce']}€ veloce"
-    
-    elif any(x in msg_lower for x in ["foto","immagine","migliora foto","foto brutta"]):
-        risposta = "📸 Mandami foto con `!migliora` e te la miglioro subito!\n\nConsigli foto perfette Vinted:\n• Sfondo bianco/pavimento chiaro\n• Luce naturale finestra\n• 4 foto: fronte, retro, etichetta, dettaglio\n• Quadrata 1:1 vende di più!\n• Niente filtri, foto vere!"
-    
-    elif any(x in msg_lower for x in ["come vendere","consigli","trucchi","vendere veloce"]):
-        risposta = "🚀 **TRUCCHI PER VENDERE VELOCE - Da mostro:**\n\n1. **Titolo:** Brand + modello + colore + taglia (es: Stone Island Felpa Nera L)\n2. **Foto:** 4 foto min, prima foto migliore\n3. **Prezzo:** 8% sotto media per vendere in 24h\n4. **Descrizione:** corta, con emoji, taglia, condizioni\n5. **Orario:** pubblica 18-21, più gente online\n6. **Boost:** dopo 2 giorni abbassa di 2€\n\nVuoi che ti analizzo un oggetto specifico?"
-    
-    elif any(x in msg_lower for x in ["guadagno","profitto","quanto guadagno","margine"]):
-        cfg = carica_config()
-        risposta = f"💰 **FILTRI GUADAGNO ATTUALI:**\n• Minimo flessibile: {cfg['guadagno_min_netto_base']}-{cfg['guadagno_min_netto_ideale']}€ netti (18-19 solo se super sicuro)\n• Banger: 20€+ verde\n• Mostro rosso: {cfg['guadagno_mostro']}€+\n• Super mostro viola: {cfg['guadagno_super_mostro']}€+\n• Sconto minimo: {cfg['sconto_min']}%\n• Spedizione: {cfg['spedizione']}€\n\nPuoi cambiare tutto con `!imposta guadagno 20` ecc. Vuoi alzare/abbassare?"
-    
-    elif ha_foto:
-        risposta = "📸 Foto ricevuta! Dimmi nome oggetto es: 'Lacoste polo bianca M' e ti faccio descrizione + prezzo al volo! Oppure usa `!vendi nome` + foto o `!migliora` per migliorare foto!"
-    
+            risposta=f"📸 Foto {nome} ricevuta! Dimmi taglia e ti dico prezzo!"
+
+    elif any(x in msg_lower for x in ["non trovo","sta a cerca","stai cercando","cerchi","sniper","offert"]):
+        risposta=f"""✅ **STO A CERCA BENE - V29 UNICO FAIL MODE** 🔥
+
+**UNICO FAIL:** solo se netto < **{cfg['guadagno_min_netto_base']}€** → lo scarto, tutto il resto passa! Così non spamma ma trova fino a 30€!
+
+🔄 Loop 1.5s su {len(cfg['user_brands'])} brand: {', '.join(cfg['user_brands'])}
+👀 Visti: {len(gia_visti)}
+💰 Min {cfg['guadagno_min_netto_base']}€ (unico fail) fino a {cfg['guadagno_super_mostro']}€ super mostro"""
+
+    elif any(x in msg_lower for x in ["secondo te","come è meglio","quale è meglio","consigliami","quale conviene"]):
+        all_text=" ".join([h.get("content","") for h in user_history[-6:]]) + " " + messaggio
+        oggetti=[]
+        for b in ["lacoste","ralph lauren","dsquared2","stone island","pokemon","charizard","nike dunk","jordan 1"]:
+            if b in all_text.lower() and b not in oggetti:
+                oggetti.append(b)
+        if len(oggetti)<2:
+            oggetti=["lacoste polo","ralph lauren polo","dsquared2 t-shirt","pokemon charizard"]
+        risultati=studia_confronto(oggetti[:4])
+        txt="🧠 **STUDIO V29 UNICO FAIL:**\n\n"
+        for i,r in enumerate(risultati):
+            if r["mercato"]:
+                txt+=f"**{i+1}. {r['nome'].title()}** → {r['mercato']['valore']}€ netto ~{round(r['mercato']['valore']-25,1)}€ {'✅' if r['mercato']['valore']-25>=16 else '❌ FAIL'}\n"
+        if risultati:
+            txt+=f"\n👉 **VINCITORE: {risultati[0]['nome'].title()}** - Margine fino a 30€!"
+        risposta=txt
+
+    elif any(x in msg_lower for x in ["filtr","guadagno","config","unico fail","fail"]):
+        risposta=f"""⚙️ **V29 UNICO FAIL - FINALE:**
+• **UNICO FAIL:** netto < {cfg['guadagno_min_netto_base']}€ → scartato, tutto il resto passa!
+• Min {cfg['guadagno_min_netto_base']}€ | Ideale {cfg['guadagno_min_netto_ideale']}€ | Mostro {cfg['guadagno_mostro']}€ | Super {cfg['guadagno_super_mostro']}€ (fino a 30€)
+• Brand: {', '.join(cfg['user_brands'])}
+• Visti: {len(gia_visti)} | Sconto {cfg['sconto_min']}%"""
+
     else:
-        # Risposta generica intelligente infinita
-        risposte_random = [
-            f"Interessante! Dimmi di più su '{messaggio[:30]}' - vuoi sapere prezzo, descrizione o consigli per venderlo?",
-            f"Ok per '{messaggio[:30]}' posso aiutarti! Vuoi che ti dico quanto vale con `!prezzo` o ti faccio descrizione con `!vendi`?",
-            f"Capito! Per '{messaggio[:30]}' ti consiglio di mandarmi foto + nome preciso e ti faccio analisi completa mercato + descrizione perfetta!",
-            f"Sono qui per te all'infinito! Chiedimi qualsiasi cosa su Vinted: prezzi, descrizioni, foto, trucchi vendita, filtri guadagno... cosa vuoi sapere su '{messaggio[:30]}'?"
-        ]
-        risposta = random.choice(risposte_random) + "\n\n**Comandi veloci:**\n`!vendi nome + foto` | `!prezzo nome` | `!migliora + foto` | `!config`"
-    
-    # Salva risposta
-    user_history.append({"role": "assistant", "content": risposta, "time": str(datetime.datetime.now())})
-    # Tieni solo ultimi 20 messaggi per non appesantire
-    if len(user_history) > 20:
-        user_history = user_history[-20:]
-    storico[str(user_id)] = user_history
+        risposta=f"V29 UNICO FAIL ONLINE! Min 16€ unico fail fino a 30€+! Dimmi `secondo te quale è meglio?`"
+
+    user_history.append({"role":"assistant","content":risposta,"time":str(datetime.datetime.now())})
+    if len(user_history)>30:
+        user_history=user_history[-30:]
+    storico[str(user_id)]=user_history
     salva_chat(storico)
-    
     return risposta
 
 @bot.event
 async def on_ready():
-    cfg = carica_config()
-    print(f"Bot ULTRA MOSTRO V13 CHAT INFINITA - ATB={cfg.get('autobuy')} {bot.user}")
+    carica_visti()
+    cfg=carica_config()
+    print(f"Bot V29 UNICO FAIL FINAL - Min {cfg['guadagno_min_netto_base']}€ unico fail fino a {cfg['guadagno_super_mostro']}€ - {bot.user}")
     controllo_vinted.start()
 
 @bot.command()
-async def filtro(ctx, azione=None, *, args=""):
-    filtri = carica_filtri()
-    if azione == "add":
-        parti = args.rsplit(" ", 1)
-        if len(parti) != 2:
-            await ctx.send("Usa: !filtro add balenciaga runner 100")
+async def filtro(ctx,azione=None,*,args=""):
+    filtri=carica_filtri()
+    if azione=="add":
+        parti=args.rsplit(" ",1)
+        if len(parti)!=2:
+            await ctx.send("Usa: !filtro add lacoste 35")
             return
-        kw, pr = parti[0].lower(), parti[1]
+        kw,pr=parti[0].lower(),parti[1]
         try: pr=float(pr)
         except: return
         filtri.append({"keyword":kw,"max":pr})
         salva_filtri(filtri)
-        await ctx.send(f"Aggiunto: {kw} sotto {pr} euro")
-    elif azione == "lista" or azione is None:
-        cfg = carica_config()
-        atb_status = "🟢 ATB SI sopra 20€ netti" if cfg.get("autobuy") else "🔴 ATB NO"
-        await ctx.send(f"ULTRA MOSTRO V13 CHAT INFINITA:\n- Sniping: 18-20€ min, 25 ROSSO, 30 VIOLA\n- Chat privata infinita: chiedimi qualsiasi cosa!\n- Vendita: !vendi !prezzo !migliora\n{atb_status}")
-
-@bot.command()
-async def filtri(ctx):
-    await ctx.invoke(bot.get_command("filtro"), azione="lista")
-
-@bot.command()
-async def atb(ctx, stato=None):
-    cfg = carica_config()
-    if stato is None:
-        status = "SI sopra 20€ netti 🤖" if cfg.get("autobuy") else "NO 🔕"
-        await ctx.send(f"ATB: **{status}** - Usa !atb si / !atb no")
-        return
-    stato = stato.lower()
-    if stato in ["si","sì","yes","on"]:
-        cfg["autobuy"] = True
-        cfg["autobuy_min_netto"] = 20
-        salva_config(cfg)
-        await ctx.send("✅ **ATB SI** - Compra da solo sopra 20€ netti")
-    elif stato in ["no","off"]:
-        cfg["autobuy"] = False
-        salva_config(cfg)
-        await ctx.send("🔴 **ATB NO**")
-    elif "soglia" in ctx.message.content:
-        try:
-            parts = ctx.message.content.split()
-            soglia = float(parts[2])
-            cfg["autobuy_min_netto"] = soglia
-            salva_config(cfg)
-            await ctx.send(f"Soglia Auto Buy: {soglia}€ netti")
-        except:
-            await ctx.send("Usa: !atb soglia 20")
-
-@bot.command()
-async def autobuy(ctx, stato=None):
-    await ctx.invoke(bot.get_command("atb"), stato=stato)
-
-@bot.command()
-async def imposta(ctx, cosa=None, valore=None):
-    cfg = carica_config()
-    if cosa=="guadagno" and valore:
-        try:
-            netto=float(valore)
-            cfg["guadagno_min_netto_ideale"]=netto
-            cfg["guadagno_min_netto_base"]=netto-2
-            salva_config(cfg)
-            await ctx.send(f"Ora minimo {netto-2}-{netto}€ netti - Puoi chattare all'infinito per cambiare quando vuoi!")
-        except:
-            pass
-    elif cosa=="sconto" and valore:
-        try:
-            cfg["sconto_min"]=float(valore)
-            salva_config(cfg)
-            await ctx.send(f"Sconto minimo {valore}%")
-        except:
-            pass
-    elif cosa=="spedizione" and valore:
-        try:
-            cfg["spedizione"]=float(valore)
-            salva_config(cfg)
-            await ctx.send(f"Spedizione {valore}€")
-        except:
-            pass
+        await ctx.send(f"✅ Aggiunto {kw} sotto {pr}€")
     else:
-        atb_txt = "SI" if cfg.get("autobuy") else "NO"
-        await ctx.send(f"⚙️ FILTRI FACILI (cambi all'infinito in chat):\nGuadagno: {cfg['guadagno_min_netto_base']}-{cfg['guadagno_min_netto_ideale']} netti\nMostro rosso: {cfg['guadagno_mostro']}€\nViola: {cfg['guadagno_super_mostro']}€\nSconto: {cfg['sconto_min']}%\nATB: {atb_txt}\n\nComandi: !imposta guadagno 20, !imposta sconto 45, !atb si/no")
+        cfg=carica_config()
+        await ctx.send(f"V29 UNICO FAIL: Min {cfg['guadagno_min_netto_base']}€ (unico fail) fino a {cfg['guadagno_super_mostro']}€ | Visti {len(gia_visti)}")
 
 @bot.command()
 async def config(ctx):
-    await ctx.invoke(bot.get_command("imposta"))
+    cfg=carica_config()
+    await ctx.send(f"⚙️ V29 UNICO FAIL: Min {cfg['guadagno_min_netto_base']}€ unico fail fino a {cfg['guadagno_super_mostro']}€ | Visti {len(gia_visti)}")
 
 @bot.command()
-async def vendi(ctx, *, nome_oggetto=""):
-    if len(ctx.message.attachments) == 0 and nome_oggetto == "":
-        await ctx.send("📸 **MANDAMI FOTO + NOME**\nEs: `!vendi Stone Island maglia nera L` + foto\nOppure chatta con me all'infinito in privato!")
+async def prezzo(ctx,*,nome_oggetto=""):
+    if not nome_oggetto:
+        await ctx.send("!prezzo lacoste polo")
         return
-    if len(ctx.message.attachments) > 0 and nome_oggetto == "":
-        nome_oggetto = "oggetto da vendere"
-    result = genera_descrizione_vendita(nome_oggetto)
-    embed = discord.Embed(title=f"📦 VENDITA: {result['titolo_seo'][:50]}", description=f"**Titolo SEO:** `{result['titolo_seo']}`\n\n**Descrizione:**\n```{result['descrizione'][:1500]}```", color=0x00ff88)
-    if result["mercato"]:
-        embed.add_field(name="💰 Mercato", value=f"{result['mercato']['valore']}€ (range {result['mercato']['min']}-{result['mercato']['max']}€)", inline=False)
-        embed.add_field(name="⚡ Veloce", value=f"{result['prezzo_veloce']}€", inline=True)
-        embed.add_field(name="💎 Max", value=f"{result['prezzo_massimo']}€", inline=True)
+    m=analizza_mercato_vendita(nome_oggetto)
+    if m:
+        netto=m["valore"]-25
+        await ctx.send(f"💰 {nome_oggetto} → {m['valore']}€ netto ~{round(netto,1)}€ {'✅ PASSA' if netto>=16 else '❌ UNICO FAIL <16€'}")
+    else:
+        await ctx.send("Non trovo")
+
+@bot.command()
+async def vendi(ctx,*,nome_oggetto=""):
+    if not nome_oggetto:
+        await ctx.send("!vendi lacoste polo + foto")
+        return
+    r=genera_descrizione_vendita(nome_oggetto)
+    embed=discord.Embed(title=f"📦 {r['titolo_seo'][:50]}",description=f"```{r['descrizione'][:1000]}```",color=0x00ff88)
+    if r["mercato"]:
+        embed.add_field(name="💰",value=f"{r['mercato']['valore']}€ netto ~{round(r['mercato']['valore']-25,1)}€")
     await ctx.send(embed=embed)
-
-@bot.command()
-async def prezzo(ctx, *, nome_oggetto=""):
-    if nome_oggetto == "":
-        await ctx.send("Usa: `!prezzo Stone Island maglia`")
-        return
-    await ctx.send(f"🔍 Cerco prezzo per: {nome_oggetto}...")
-    mercato = analizza_mercato_vendita(nome_oggetto)
-    if not mercato:
-        await ctx.send("❌ Non trovato, prova nome più generico - chatta con me per aiuto!")
-        return
-    embed = discord.Embed(title=f"💰 PREZZO: {nome_oggetto[:40]}", description=f"**Valore:** {mercato['valore']}€\n**Range:** {mercato['min']}-{mercato['max']}€\n**Veloce:** {round(mercato['valore']*0.92,2)}€\n**Massimo:** {round(mercato['valore']*1.05,2)}€", color=0xffaa00)
-    await ctx.send(embed=embed)
-
-@bot.command()
-async def migliora(ctx):
-    if len(ctx.message.attachments) == 0:
-        await ctx.send("📸 Allega foto con `!migliora` e te la miglioro!")
-        return
-    await ctx.send("✨ Miglioro foto...")
-    try:
-        attachment = ctx.message.attachments[0]
-        img_data = await attachment.read()
-        img = Image.open(io.BytesIO(img_data))
-        enhancer = ImageEnhance.Contrast(img)
-        img = enhancer.enhance(1.2)
-        enhancer = ImageEnhance.Brightness(img)
-        img = enhancer.enhance(1.1)
-        enhancer = ImageEnhance.Sharpness(img)
-        img = enhancer.enhance(1.3)
-        enhancer = ImageEnhance.Color(img)
-        img = enhancer.enhance(1.15)
-        buffer = io.BytesIO()
-        img.save(buffer, format="JPEG", quality=95)
-        buffer.seek(0)
-        file = discord.File(buffer, filename="foto_migliorata.jpg")
-        embed = discord.Embed(title="✨ FOTO MIGLIORATA!", description="✅ Contrasto +20%\n✅ Luce +10%\n✅ Nitidezza +30%\n✅ Colori +15%\n\nConsigli: sfondo chiaro, luce naturale, 4 foto!", color=0x9b59b6)
-        await ctx.send(embed=embed, file=file)
-    except Exception as e:
-        await ctx.send(f"Errore: {e}")
-
-@bot.command()
-async def chat(ctx, *, messaggio=""):
-    if messaggio == "":
-        await ctx.send("💬 Chat infinita! Scrivimi qualsiasi cosa: prezzi, descrizioni, consigli, filtri...")
-        return
-    risposta = risposta_chat_infinita(ctx.author.id, messaggio, False)
-    await ctx.send(risposta)
 
 @bot.event
 async def on_message(message):
-    if message.author == bot.user:
+    if message.author==bot.user:
         return
-    
-    # CHAT INFINITA IN PRIVATO
-    if isinstance(message.channel, discord.DMChannel):
-        # Se è comando, processa comando
-        if message.content.startswith("!"):
-            await bot.process_commands(message)
-            return
-        
-        # Altrimenti chat infinita
-        ha_foto = len(message.attachments) > 0
-        if ha_foto:
-            # Foto + testo
-            nome = message.content if message.content else "oggetto in foto"
-            await message.channel.send("📸 Foto ricevuta! Analizzo e ti rispondo...")
-            result = genera_descrizione_vendita(nome)
-            risposta = risposta_chat_infinita(message.author.id, nome + " foto", True)
-            embed = discord.Embed(title=f"📦 Analizzato: {result['titolo_seo'][:40]}", description=risposta[:1800], color=0x00ff88)
-            if result["mercato"]:
-                embed.add_field(name="Prezzo veloce", value=f"{result['prezzo_veloce']}€", inline=True)
-            await message.channel.send(embed=embed)
-            return
-        else:
-            # Solo testo - chat infinita
-            risposta = risposta_chat_infinita(message.author.id, message.content, False)
-            await message.channel.send(risposta)
-            return
-    
-    # Se nel server e menziona bot
-    if bot.user in message.mentions and not message.content.startswith("!"):
-        risposta = risposta_chat_infinita(message.author.id, message.content, len(message.attachments)>0)
+    if len(message.attachments)>0:
+        last_photo_per_user[message.author.id]=message.attachments[0].url
+    if message.content.startswith("!"):
+        await bot.process_commands(message)
+        return
+    if isinstance(message.channel,discord.DMChannel):
+        ha_foto=len(message.attachments)>0
+        if not ha_foto and any(k in message.content.lower() for k in ["quella foto","quella","vedi l'immagine","già mandata","usa quella"]):
+            if message.author.id in last_photo_per_user:
+                ha_foto=True
+        async with message.channel.typing():
+            risposta=risposta_chat_infinita(message.author.id,message.content,ha_foto)
+        await message.channel.send(risposta)
+        return
+    if bot.user in message.mentions:
+        ha_foto=len(message.attachments)>0
+        risposta=risposta_chat_infinita(message.author.id,message.content,ha_foto)
         await message.channel.send(f"{message.author.mention} {risposta}")
         return
-    
     await bot.process_commands(message)
 
 @tasks.loop(seconds=1.2)
 async def controllo_vinted():
     try:
-        cfg = carica_config()
-        url="https://www.vinted.it/api/v2/catalog/items?order=newest_first&per_page=35"
-        headers={"User-Agent":"Mozilla/5.0","Accept":"application/json"}
-        r=requests.get(url,headers=headers,timeout=8)
-        for item in r.json().get("items",[]):
-            iid=str(item["id"])
-            if iid in gia_visti:
-                continue
-            gia_visti.add(iid)
-            titolo=item.get("title","")
-            titolo_low=titolo.lower()
-            brand=item.get("brand_title","")
+        cfg=carica_config()
+        sess=get_session()
+        headers={"User-Agent":random.choice(USER_AGENTS),"Accept":"application/json","Referer":"https://www.vinted.it/"}
+        urls=[]
+        for brand in cfg.get("user_brands",[])+cfg.get("scan_brands",[]):
+            b_q=brand.replace(" ","%20")
+            urls.append(f"https://www.vinted.it/api/v2/catalog/items?search_text={b_q}&order=newest_first&per_page=25")
+        urls.append("https://www.vinted.it/api/v2/catalog/items?order=newest_first&per_page=40")
+        urls=list(dict.fromkeys(urls))[:12]
+        for url in urls:
             try:
-                prezzo=float(item.get("price",{}).get("amount"))
-            except:
-                continue
-            if prezzo<3 or prezzo>800:
-                continue
-            if not is_conosciuto(titolo, brand):
-                continue
-            filtri=carica_filtri()
-            if filtri:
-                if not any(f["keyword"] in titolo_low and prezzo <= f["max"] for f in filtri):
+                r=sess.get(url,headers=headers,timeout=12)
+                if r.status_code==429:
+                    await discord.utils.sleep_until(datetime.datetime.now()+datetime.timedelta(seconds=5))
                     continue
-            mercato=analizza_mostro(titolo, brand)
-            if not mercato:
+                if r.status_code!=200:
+                    continue
+                for item in r.json().get("items",[]):
+                    iid=str(item.get("id"))
+                    if iid in gia_visti:
+                        continue
+                    gia_visti.add(iid)
+                    titolo=item.get("title","")
+                    titolo_low=titolo.lower()
+                    brand=item.get("brand_title","")
+                    try:
+                        prezzo=float(item.get("price",{}).get("amount"))
+                    except:
+                        continue
+                    max_per_brand=cfg.get("max_price_per_brand",{})
+                    b_detect=detect_brand(titolo+" "+brand)
+                    max_allowed=max_per_brand.get(b_detect, max_per_brand.get(brand.lower(), 80))
+                    if prezzo>max_allowed:
+                        continue
+                    if prezzo<5 or prezzo>350:
+                        continue
+                    if not is_conosciuto(titolo,brand):
+                        continue
+                    filtri=carica_filtri()
+                    if filtri:
+                        if not any(f["keyword"].lower() in titolo_low and prezzo <= f["max"] for f in filtri):
+                            continue
+                    mercato=analizza_mostro(titolo,brand)
+                    if not mercato:
+                        continue
+                    valore=mercato["valore"]
+                    diff=valore-prezzo
+                    netto=diff-cfg["spedizione"]
+                    sconto=(diff/valore*100) if valore>0 else 0
+                    roi=(diff/prezzo*100) if prezzo>0 else 0
+                    # V29 - UNICO FAIL VERO: SOLO SE NETTO < 16
+                    if netto < cfg["guadagno_min_netto_base"]:
+                        continue  # UNICO FAIL
+                    # Tutto il resto passa, livelli solo per emoji
+                    if netto >= cfg["guadagno_super_mostro"]:
+                        livello="super_mostro"
+                    elif netto >= cfg["guadagno_mostro"]:
+                        livello="mostro"
+                    elif netto >= cfg["guadagno_min_netto_ideale"]:
+                        livello="banger"
+                    else:
+                        livello="accettabile"
+                    link=f"https://www.vinted.it/items/{iid}"
+                    foto=item.get("photo",{}).get("url","")
+                    canale=None
+                    for g in bot.guilds:
+                        for ch in g.text_channels:
+                            if ch.permissions_for(g.me).send_messages:
+                                canale=ch
+                                break
+                        if canale:
+                            break
+                    if canale:
+                        color=0x00ff88 if livello=="banger" else 0xffaa00 if livello=="accettabile" else 0xff0000 if livello=="mostro" else 0x9b59b6
+                        titolo_embed=f"{'💥' if livello=='banger' else '🔴' if livello=='mostro' else '🟣' if livello=='super_mostro' else '💧'} {round(netto)}€ NETTI: {titolo[:45]}"
+                        embed=discord.Embed(title=titolo_embed,description=f"**Brand:** {brand} ({b_detect})\n**Acquisto:** {prezzo}€ | **Rivendita:** {valore}€\n**NETTO: {round(netto)}€** | Sconto {round(sconto)}% ROI {round(roi)}%\n[👉 PRENDI!]({link})",color=color)
+                        if foto:
+                            embed.set_image(url=foto)
+                        embed.set_footer(text=f"V29 UNICO FAIL | Netto {round(netto)}€ (min 16 fino a 30+) | {b_detect}")
+                        content="@everyone 🟣 30€+!" if livello=="super_mostro" else "@here 🔴 22€+!" if livello=="mostro" else ""
+                        await canale.send(content=content,embed=embed)
+                if len(gia_visti)%20==0:
+                    salva_visti()
+                await discord.utils.sleep_until(datetime.datetime.now()+datetime.timedelta(milliseconds=300))
+            except Exception as e_inner:
+                print(f"scan err {e_inner}")
                 continue
-            valore=mercato["valore"]
-            diff=valore-prezzo
-            netto=diff-cfg["spedizione"]
-            sconto=(diff/valore*100) if valore>0 else 0
-            roi=(diff/prezzo*100) if prezzo>0 else 0
-            ok=False
-            livello="normale"
-            if netto >= 30:
-                if sconto >= 30:
-                    ok=True
-                    livello="super_mostro"
-            elif netto >= 25:
-                if sconto >= 35:
-                    ok=True
-                    livello="mostro"
-            elif netto >= 20:
-                if sconto >= 42:
-                    ok=True
-                    livello="banger"
-            elif netto >= 18:
-                if sconto >= 50 and mercato.get("confidenza_alta"):
-                    ok=True
-                    livello="accettabile"
-            if not ok:
-                continue
-            if netto < cfg["guadagno_min_netto_base"]:
-                continue
-            link=f"https://www.vinted.it/items/{iid}"
-            foto=item.get("photo",{}).get("url","")
-            canale=None
-            for g in bot.guilds:
-                for ch in g.text_channels:
-                    if ch.permissions_for(g.me).send_messages:
-                        canale=ch
-                        break
-                if canale:
-                    break
-            if canale:
-                atb_attivo = cfg.get("autobuy", False)
-                soglia_atb = cfg.get("autobuy_min_netto", 20)
-                auto_buy_msg = ""
-                if atb_attivo and netto >= soglia_atb:
-                    successo, msg = tenta_autobuy(iid, titolo, prezzo)
-                    auto_buy_msg = f"\n🤖 **AUTO BUY:** {msg}"
-                if livello == "super_mostro":
-                    color=0x9b59b6
-                    titolo_embed=f"🟣 MOSTRO ASSOLUTO {round(netto)}€ NETTI 🟣: {titolo[:40]}"
-                    desc_extra="🟣🟣🟣 **VIOLA - SUPER MOSTRO 30€+!** 🟣🟣🟣\n"
-                elif livello == "mostro":
-                    color=0xff0000
-                    titolo_embed=f"🔴 MOSTRO {round(netto)}€ NETTI: {titolo[:45]}"
-                    desc_extra="🔴 **ROSSO - MOSTRO 25€+!**\n"
-                elif livello == "banger":
-                    color=0x00ff88
-                    titolo_embed=f"💥 BANGER {round(netto)}€ NETTI: {titolo[:45]}"
-                    desc_extra=""
-                else:
-                    color=0xffaa00
-                    titolo_embed=f"💧 BUONO {round(netto)}€ NETTI: {titolo[:45]}"
-                    desc_extra="(18-19€ super sicuro)\n"
-                fake_warning=""
-                if mercato.get("is_lux") and sconto>75:
-                    fake_warning="⚠️ Possibile fake!\n"
-                atb_info = f"\nATB: {'🟢 SI sopra 20€' if atb_attivo else '🔴 NO'} {auto_buy_msg}"
-                embed=discord.Embed(title=titolo_embed, description=f"{desc_extra}**Brand:** {brand}\n**Acquisto:** {prezzo}€\n**Rivendita:** **{valore}€** (range {mercato['min']}-{mercato['max']}€ su {mercato['count']})\n**LORDO:** {round(diff)}€ → **NETTO: {round(netto)}€** ✅\n**Sconto:** {round(sconto)}%\n**ROI:** {round(roi)}%\n{fake_warning}{atb_info}\n[👉 PRENDI!]({link})", color=color)
-                if foto:
-                    embed.set_image(url=foto)
-                embed.set_footer(text=f"V13 CHAT INFINITA | Netto {round(netto)}€ | ROI {round(roi)}%")
-                content = "@everyone 🟣 VIOLA 30€+!" if livello=="super_mostro" else "@here 🔴 MOSTRO 25€+!" if livello=="mostro" else ""
-                await canale.send(content=content, embed=embed)
+        salva_visti()
     except Exception as e:
-        print(f"Errore: {e}")
+        print(f"Errore V29: {e}")
 
 from flask import Flask
 app=Flask(__name__)
 @app.route("/")
 def home():
-    return "Bot ULTRA MOSTRO V13 - Chat infinita!"
+    return "Bot V29 FINAL UNICO FAIL - Min 16€ unico fail fino a 30€+ - Chat perfetta"
 def run_flask():
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    app.run(host="0.0.0.0",port=int(os.environ.get("PORT",10000)))
 import threading
-threading.Thread(target=run_flask, daemon=True).start()
+threading.Thread(target=run_flask,daemon=True).start()
 
 if __name__=="__main__":
     tok=os.getenv("DISCORD_TOKEN")
