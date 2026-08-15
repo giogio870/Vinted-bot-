@@ -26,6 +26,63 @@ TUTTI = list(set(BRANDS_BUDGET))
 
 CARD_KEYWORDS = ["psa","topps","bowman","pokemon","charizard","refractor","graded","autograph","auto","/99","/25","/10","numbered","sapphire","chrome","piccolo","biglietto","carta"]
 
+import difflib
+
+# Dizionario modelli sneaker riconosciuti - se il titolo e' sbagliato/storpiato
+# (es. "Nike volume" invece di "Nike Vomero") lo correggiamo prima di cercare
+SNEAKER_MODELS = [
+    "air zoom vomero 5", "vomero 5", "vomero", "air max 90", "air max 95", "air max 97",
+    "air max 1", "air max plus", "air force 1", "dunk low", "dunk high",
+    "jordan 1 low", "jordan 1 high", "jordan 1 mid", "jordan 4", "jordan 3",
+    "jordan 11", "jordan 5", "p-6000", "990v3", "990v6", "530", "9060",
+    "2002r", "gel-1130", "gel-nyc", "gel-kayano", "samba", "gazelle",
+    "spezial", "campus", "yeezy 350", "yeezy 700", "ultraboost", "shox",
+    "pegasus", "structure", "invincible", "zoom fly", "550", "574",
+    "react", "cortez", "blazer", "waffle", "tiempo", "phantom",
+    "mercurial", "copa", "predator", "superstar", "forum", "pro model",
+    "nizza", "stan smith", "ultraboost 21", "ultraboost 22"
+]
+
+# Modelli abbigliamento - se il titolo li contiene, cerca il modello preciso
+ABBIGLIAMENTO_MODELLI = [
+    "lacoste polo", "ralph lauren polo", "stone island vestaglia",
+    "stone island marina", "stone island reflective", "stone island nylon",
+    "stone island wool", "dsquared2 hoodie", "dsquared2 t-shirt",
+    "fred perry shirt", "tommy hilfiger polo", "armani exchange",
+    "ralph lauren sweater", "ralph lauren hoodie", "ralph lauren jacket",
+    "lacoste sweater", "lacoste hoodie", "north face puffer",
+    "north face jacket", "carhartt jacket", "patagonia fleece"
+]
+
+def correggi_modello_sneaker(titolo):
+    """Se il titolo contiene una scarpa/indumento noto ma storpiato,
+    corregge il testo di ricerca. Se non trova match affidabile, ritorna None."""
+    tl = titolo.lower()
+    parole = tl.split()
+    migliore_match = None
+    migliore_score = 0
+    tutti_modelli = SNEAKER_MODELS + ABBIGLIAMENTO_MODELLI
+    for modello in tutti_modelli:
+        modello_parole = modello.split()
+        for i in range(len(parole)):
+            frammento = " ".join(parole[i:i+len(modello_parole)+1])
+            score = difflib.SequenceMatcher(None, frammento, modello).ratio()
+            if score > migliore_score:
+                migliore_score = score
+                migliore_match = modello
+    # Soglia piu alta per evitare false corrispondenze
+    if migliore_score >= 0.6:
+        return migliore_match
+    return None
+
+def is_sneaker_brand(brand, titolo):
+    t = (brand + " " + titolo).lower()
+    return any(x in t for x in ["nike", "adidas", "jordan", "new balance", "nb", "asics", "reebok", "yeezy", "balenciaga", "salomon", "on running", "hoka"])
+
+def is_abbigliamento_brand(brand, titolo):
+    t = (brand + " " + titolo).lower()
+    return any(x in t for x in ["lacoste", "ralph", "stone", "dsquared", "fred", "tommy", "armani", "north", "carhartt", "patagonia"])
+
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36",
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1"
@@ -171,8 +228,6 @@ def detect_card_variant(titolo):
     return "+".join(varianti) if varianti else "base"
 
 # ===================== CONDIZIONI VINTED (FIX!) =====================
-# L'API Vinted restituisce condizioni in ITALIANO:
-# "Nuovo con etichette", "Nuovo senza etichette", "Ottime", "Molto buono", "Buone", "Sufficiente"
 COND_TOP = ["nuovo con etichette","nuovo senza etichette","new with tags","new without tags","nuovo"]
 COND_BUONE = ["ottime","molto buono","very good","ottimo","eccellente","excellent"]
 COND_MEDIE = ["buone","buono","good","discrete"]
@@ -196,7 +251,7 @@ def condizioni_simili(status1, status2):
     t1 = condizione_tier(status1)
     t2 = condizione_tier(status2)
     if t1 == "sconosciuta" or t2 == "sconosciuta":
-        return True  # se non sappiamo, non filtrare
+        return True
     return t1 == t2
 
 # ===================== PRICE UTILS =====================
@@ -233,34 +288,56 @@ def controlla_stabilita(prezzi):
         pass
     return True,None
 
+# ===================== CACHE ANALISI =====================
+_cache_analisi = {}
+
+def get_cache_analisi(key):
+    k = key.lower().strip()
+    if k in _cache_analisi:
+        result, ts = _cache_analisi[k]
+        if time.time() - ts < 1800:
+            return result
+        del _cache_analisi[k]
+    return None
+
+def set_cache_analisi(key, result):
+    k = key.lower().strip()
+    _cache_analisi[k] = (result, time.time())
+    if len(_cache_analisi) > 200:
+        now = time.time()
+        for ck in list(_cache_analisi.keys()):
+            if now - _cache_analisi[ck][1] > 1800:
+                del _cache_analisi[ck]
+
 # ===================== CORE: ANALISI MERCATO FIXATA =====================
 def analizza_mostro(titolo, brand_input, prezzo_acquisto=None, condizione_item="", brand_title_api="", size_title=""):
-    """
-    FIX V16b:
-    - Usa TITOLO COMPLETO per la ricerca (non solo 3 parole)
-    - Filtra per brand_title UGUALE (match esatto brand)
-    - Filtra per CONDIZIONE SIMILE usando i veri valori Vinted (Ottime, Buone, etc)
-    - Preferisce annunci con 5+ cuori ma fallback a tutti se troppo pochi
-    - Deve essere almeno 15â‚¬ sotto il prezzo di riferimento
-    """
     cfg = carica_config()
+    cache_key = f"{titolo}_{brand_input}_{condizione_item}_{size_title}"
+    cached = get_cache_analisi(cache_key)
+    if cached is not None:
+        return cached
     sess = get_session()
     headers = {"User-Agent": random.choice(USER_AGENTS), "Accept": "application/json", "Referer": "https://www.vinted.it/"}
     try:
         is_card_item = is_card(titolo, brand_input)
         min_cuori = cfg.get("min_cuori_validazione", 5)
 
-        # === SEARCH: USA TITOLO COMPLETO, NON SOLO 3 PAROLE ===
+        modello_corretto = None
+        if is_sneaker_brand(brand_input, titolo) or is_abbigliamento_brand(brand_input, titolo):
+            modello_corretto = correggi_modello_sneaker(titolo)
+            if modello_corretto is None:
+                return None
+
         if is_card_item:
             variante = detect_card_variant(titolo)
             search = "%20".join(titolo.split()[:5])
             if variante and variante != "base":
                 search = f"{search}%20{variante.replace('+', '%20')}"
+        elif modello_corretto:
+            search = "%20".join((brand_input + " " + modello_corretto).split())
         else:
-            # Usa tutto il titolo per ricerca precisa
             search = "%20".join(titolo.split()[:6])
 
-        # Primo tentativo: titolo completo
         url = f"https://www.vinted.it/api/v2/catalog/items?search_text={search}&per_page=40&order=relevance"
         r = sess.get(url, headers=headers, timeout=10)
         if r.status_code == 429:
@@ -281,28 +358,23 @@ def analizza_mostro(titolo, brand_input, prezzo_acquisto=None, condizione_item="
             except:
                 pass
 
-        # === FILTRA PER BRAND UGUALE ===
         brand_target = (brand_title_api or brand_input or "").lower().strip()
         if brand_target:
             stessi_brand = [a for a in tutti_annunci if a["brand"].lower().strip() == brand_target]
             if len(stessi_brand) >= 4:
                 tutti_annunci = stessi_brand
 
-        # === FILTRA PER CONDIZIONE SIMILE ===
         if condizione_item:
-            condizione_item_lower = condizione_item.lower()
             simili_cond = [a for a in tutti_annunci if condizioni_simili(a["status"], condizione_item)]
             if len(simili_cond) >= 4:
                 tutti_annunci = simili_cond
 
-        # === FILTRA PER TAGLIA UGUALE (se disponibile) ===
         if size_title:
             size_clean = size_title.lower().strip()
             stessi_size = [a for a in tutti_annunci if a["size"].lower().strip() == size_clean]
             if len(stessi_size) >= 4:
                 tutti_annunci = stessi_size
 
-        # Se troppo pochi, ricerca meno specifica (meno parole)
         if len(tutti_annunci) < 5 and not is_card_item:
             search2 = "%20".join(titolo.split()[:3])
             url2 = f"https://www.vinted.it/api/v2/catalog/items?search_text={search2}&per_page=40&order=relevance"
@@ -320,7 +392,6 @@ def analizza_mostro(titolo, brand_input, prezzo_acquisto=None, condizione_item="
                         extra.append({"prezzo": p_val, "status": status, "cuori": fav_count, "brand": bt, "size": sz})
                 except:
                     pass
-            # Filtra per brand anche nei risultati extra
             if brand_target:
                 extra_brand = [a for a in extra if a["brand"].lower().strip() == brand_target]
                 if len(extra_brand) >= 4:
@@ -330,14 +401,12 @@ def analizza_mostro(titolo, brand_input, prezzo_acquisto=None, condizione_item="
         if not tutti_annunci:
             return None
 
-        # === PRIORITA: annunci con 5+ cuori ===
         validati = [a for a in tutti_annunci if a["cuori"] >= min_cuori]
         if len(validati) < cfg.get("min_annunci_validati", 5):
             validati = [a for a in tutti_annunci if a["cuori"] >= 3]
         if len(validati) < cfg.get("min_annunci_validati", 5):
-            validati = tutti_annunci  # fallback: usa tutti
+            validati = tutti_annunci
 
-        # Filtra per condizione anche nei validati
         if condizione_item:
             validati_cond = [a for a in validati if condizioni_simili(a["status"], condizione_item)]
             if len(validati_cond) >= cfg.get("min_annunci_validati", 3):
@@ -365,6 +434,7 @@ def analizza_mostro(titolo, brand_input, prezzo_acquisto=None, condizione_item="
             "is_card": is_card_item,
             "validati_cuori": len([a for a in validati if a["cuori"] >= min_cuori])
         }
+        set_cache_analisi(cache_key, result)
         return result
     except:
         return None
@@ -435,7 +505,7 @@ def genera_descrizione_vendita(nome, brand_detected=""):
     titolo = nome.title()
     if brand and brand.lower() not in nome.lower():
         titolo = f"{brand.title()} {titolo}"
-    desc = f"ðŸ”¥ {titolo} ðŸ”¥\nâœ… Brand {brand.title() if brand else 'Originale'} 9/10\nðŸ“¦ Spedizione 24h tracciata"
+    desc = f"ð¥ {titolo} ð¥\nâ Brand {brand.title() if brand else 'Originale'} 9/10\nð¦ Spedizione 24h tracciata"
     return {"titolo_seo": titolo, "descrizione": desc, "prezzo_veloce": veloce, "prezzo_massimo": maxp, "mercato": merc, "brand": brand}
 
 def studia_confronto(lista):
@@ -458,7 +528,7 @@ def risposta_chat_infinita(user_id, messaggio, ha_foto=False):
 
     if ha_foto:
         nome = messaggio.strip() or "oggetto in foto"
-        if len(nome) < 5 or any(k in msg_lower for k in ["usa quella", "quella foto", "vedi l'immagine", "giÃ  mandata"]):
+        if len(nome) < 5 or any(k in msg_lower for k in ["usa quella", "quella foto", "vedi l'immagine", "gia mandata"]):
             for h in reversed(user_history[:-1]):
                 txt = h.get("content", "")
                 if len(txt) > 5:
@@ -472,28 +542,28 @@ def risposta_chat_infinita(user_id, messaggio, ha_foto=False):
         if merc:
             flag_str = ""
             if merc.get("flag"):
-                flag_str = f"\nâš ï¸ {merc['flag'].replace('_', ' ')}"
+                flag_str = f"\nâ ï¸ {merc['flag'].replace('_', ' ')}"
             validati_str = f"\nâ¤ï¸ {merc.get('validati', 0)} annunci validati (5+ cuori)" if merc.get("validati", 0) > 0 else ""
             is_card_item = is_card(nome, brand_det or "")
             card_str = ""
             if is_card_item:
                 variante = detect_card_variant(nome)
-                card_str = f"\nðŸƒ Carta: variante {variante}"
-            risposta = (f"ðŸ“¸ **{result['titolo_seo']}**\n"
-                       f"ðŸ“Š Valore mercato: **{merc['valore']}â‚¬** (range: {merc['min']}-{merc['max']}â‚¬ su {merc['count']} annunci)"
+                card_str = f"\nð Carta: variante {variante}"
+            risposta = (f"ð¸ **{result['titolo_seo']}**\n"
+                       f"ð Valore mercato: **{merc['valore']}â¬** (range: {merc['min']}-{merc['max']}â¬ su {merc['count']} annunci)"
                        f"{validati_str}{card_str}{flag_str}\n\n"
-                       f"âš¡ Prezzo veloce: {result['prezzo_veloce']}â‚¬ | Max: {result['prezzo_massimo']}â‚¬\n\n"
+                       f"â¡ Prezzo veloce: {result['prezzo_veloce']}â¬ | Max: {result['prezzo_massimo']}â¬\n\n"
                        f"Vuoi la descrizione? Scrivi `!vendi {nome}`")
         else:
-            risposta = f"ðŸ“¸ Foto {nome} ricevuta! Non trovo abbastanza annunci validati (5+ cuori). Dimmi brand e modello precisi."
+            risposta = f"ð¸ Foto {nome} ricevuta! Non trovo abbastanza annunci validati (5+ cuori) â¤ï¸. Dimmi brand e modello precisi."
 
     elif any(x in msg_lower for x in ["non trovo", "sta a cerca", "stai cercando", "cerchi", "sniper", "offert"]):
-        risposta = (f"âœ… **Bot attivo** ðŸ”¥\n"
-                    f"ðŸ”„ Scansione ogni 1.2s su {len(cfg['user_brands'])} brand\n"
+        risposta = (f"â **Bot attivo** ð¥\n"
+                    f"ð Scansione ogni 1.2s su {len(cfg['user_brands'])} brand\n"
                     f"â±ï¸ Solo freschi (max {cfg['max_secondi_freschezza']}s)\n"
                     f"â¤ï¸ Confronto con annunci 5+ cuori\n"
-                    f"ðŸ’° Sotto prezzo min: {cfg['sotto_prezzo_min']}â‚¬\n"
-                    f"ðŸ‘€ Visti: {len(gia_visti)}")
+                    f"ð° Sotto prezzo min: {cfg['sotto_prezzo_min']}â¬\n"
+                    f"ð Visti: {len(gia_visti)}")
 
     elif any(x in msg_lower for x in ["secondo te", "come Ã¨ meglio", "quale Ã¨ meglio", "consigliami", "quale conviene"]):
         all_text = " ".join([h.get("content", "") for h in user_history[-6:]]) + " " + messaggio
@@ -504,40 +574,40 @@ def risposta_chat_infinita(user_id, messaggio, ha_foto=False):
         if len(oggetti) < 2:
             oggetti = ["lacoste polo", "ralph lauren polo", "dsquared2 t-shirt", "pokemon charizard"]
         risultati = studia_confronto(oggetti[:4])
-        txt = "ðŸ§  **Confronto mercati:**\n\n"
+        txt = "ð§  **Confronto mercati:**\n\n"
         for i, r in enumerate(risultati):
             if r["mercato"]:
-                flag_str = f" âš ï¸ {r['mercato']['flag'].replace('_', ' ')}" if r["mercato"].get("flag") else ""
+                flag_str = f" â ï¸ {r['mercato']['flag'].replace('_', ' ')}" if r["mercato"].get("flag") else ""
                 val_str = f" | â¤ï¸ {r['mercato'].get('validati', 0)} validati" if r["mercato"].get("validati", 0) > 0 else ""
-                txt += f"**{i+1}. {r['nome'].title()}** â†’ {r['mercato']['valore']}â‚¬ ({r['mercato']['count']} annunci){val_str}{flag_str}\n"
+                txt += f"**{i+1}. {r['nome'].title()}** â {r['mercato']['valore']}â¬ ({r['mercato']['count']} annunci){val_str}{flag_str}\n"
         if risultati:
-            txt += f"\nðŸ‘‰ **Top: {risultati[0]['nome'].title()}** a {risultati[0]['mercato']['valore']}â‚¬"
+            txt += f"\nð **Top: {risultati[0]['nome'].title()}** a {risultati[0]['mercato']['valore']}â¬"
         risposta = txt
 
     elif any(x in msg_lower for x in ["filtr", "guadagno", "config", "soglie", "impostazioni"]):
-        risposta = (f"âš™ï¸ **Config V16b:**\n"
-                    f"â€¢ Sotto prezzo min: {cfg['sotto_prezzo_min']}â‚¬\n"
-                    f"â€¢ Soglie: ðŸ’§ðŸ”¥ {cfg['sotto_prezzo_min']}â‚¬ | ðŸ’¥ðŸ”¥ {cfg['guadagno_banger']}â‚¬ | ðŸ”´ðŸ”¥ {cfg['guadagno_mostro']}â‚¬ | ðŸŸ£ðŸ”¥ {cfg['guadagno_super_mostro']}â‚¬\n"
-                    f"â€¢ Cuori min validazione: {cfg['min_cuori_validazione']}\n"
-                    f"â€¢ Freschi max: {cfg['max_secondi_freschezza']}s\n"
-                    f"â€¢ Spedizione: {cfg['spedizione']}â‚¬\n"
-                    f"â€¢ Brand: {', '.join(cfg['user_brands'])}\n"
-                    f"â€¢ Visti: {len(gia_visti)}")
+        risposta = (f"âï¸ **Config V19:**\n"
+                    f"â¢ Sotto prezzo min: {cfg['sotto_prezzo_min']}â¬\n"
+                    f"â¢ Soglie: ð§ð¥ {cfg['sotto_prezzo_min']}â¬ | ð¥ð¥ {cfg['guadagno_banger']}â¬ | ð´ð¥ {cfg['guadagno_mostro']}â¬ | ð£ð¥ {cfg['guadagno_super_mostro']}â¬\n"
+                    f"â¢ Cuori min validazione: {cfg['min_cuori_validazione']} â¤ï¸\n"
+                    f"â¢ Freschi max: {cfg['max_secondi_freschezza']}s\n"
+                    f"â¢ Spedizione: {cfg['spedizione']}â¬\n"
+                    f"â¢ Brand: {', '.join(cfg['user_brands'])}\n"
+                    f"â¢ Visti: {len(gia_visti)}")
 
     else:
         if brand_det:
             m = analizza_mercato_vendita(messaggio)
             if m:
-                flag_str = f"\nâš ï¸ {m['flag'].replace('_', ' ')}" if m.get("flag") else ""
+                flag_str = f"\nâ ï¸ {m['flag'].replace('_', ' ')}" if m.get("flag") else ""
                 validati_str = f"\nâ¤ï¸ {m.get('validati', 0)} validati (5+ cuori)" if m.get("validati", 0) > 0 else ""
-                risposta = (f"ðŸ“Š **{messaggio.title()}**\n"
-                           f"Valore: {m['valore']}â‚¬ (range: {m['min']}-{m['max']}â‚¬ su {m['count']})"
+                risposta = (f"ð **{messaggio.title()}**\n"
+                           f"Valore: {m['valore']}â¬ (range: {m['min']}-{m['max']}â¬ su {m['count']})"
                            f"{validati_str}{flag_str}\n\n"
                            f"Scrivi `!vendi {messaggio}` per la descrizione")
             else:
-                risposta = f"Ho riconosciuto **{brand_det.title()}** ma non trovo abbastanza annunci validati. Dimmi il modello preciso."
+                risposta = f"Ho riconosciuto **{brand_det.title()}** ma non trovo abbastanza annunci validati â¤ï¸. Dimmi il modello preciso."
         else:
-            risposta = ("Bot Vinted V16b ðŸ”¥\n"
+            risposta = ("Bot Vinted V19 ð¥\n"
                        "Mandami una **foto** + nome per analisi prezzo\n"
                        "Comandi: `!vendi`, `!prezzo`, `!migliora`\n"
                        "Dimmi `config` per le soglie")
@@ -554,7 +624,7 @@ def risposta_chat_infinita(user_id, messaggio, ha_foto=False):
 async def on_ready():
     carica_visti()
     cfg = carica_config()
-    print(f"Bot V16bb - Cuori {cfg['min_cuori_validazione']}+ | Sotto prezzo {cfg['sotto_prezzo_min']}â‚¬ | Mostro {cfg['guadagno_mostro']}/{cfg['guadagno_super_mostro']}â‚¬ | Freschi {cfg['max_secondi_freschezza']}s | {bot.user}")
+    print(f"Bot V19b - Cuori {cfg['min_cuori_validazione']}+ | Sotto prezzo {cfg['sotto_prezzo_min']}â¬ | Mostro {cfg['guadagno_mostro']}/{cfg['guadagno_super_mostro']}â¬ | Freschi {cfg['max_secondi_freschezza']}s | {bot.user}")
     controllo_vinted.start()
 
 @bot.command()
@@ -572,15 +642,15 @@ async def filtro(ctx, azione=None, *, args=""):
             return
         filtri.append({"keyword": kw, "max": pr})
         salva_filtri(filtri)
-        await ctx.send(f"âœ… Aggiunto {kw} sotto {pr}â‚¬")
+        await ctx.send(f"â Aggiunto {kw} sotto {pr}â¬")
     else:
         cfg = carica_config()
-        await ctx.send(f"âš™ï¸ Sotto prezzo {cfg['sotto_prezzo_min']}â‚¬ | Cuori min {cfg['min_cuori_validazione']} | Freschi {cfg['max_secondi_freschezza']}s | Visti {len(gia_visti)}")
+        await ctx.send(f"âï¸ Sotto prezzo {cfg['sotto_prezzo_min']}â¬ | Cuori min {cfg['min_cuori_validazione']} â¤ï¸ | Freschi {cfg['max_secondi_freschezza']}s | Visti {len(gia_visti)}")
 
 @bot.command()
 async def config(ctx):
     cfg = carica_config()
-    await ctx.send(f"âš™ï¸ V16b | ðŸ’§ðŸ”¥ {cfg['sotto_prezzo_min']}â‚¬ | ðŸ’¥ðŸ”¥ {cfg['guadagno_banger']}â‚¬ | ðŸ”´ðŸ”¥ {cfg['guadagno_mostro']}â‚¬ | ðŸŸ£ðŸ”¥ {cfg['guadagno_super_mostro']}â‚¬ | Cuori: {cfg['min_cuori_validazione']}+ | Spedizione {cfg['spedizione']}â‚¬ | Freschi {cfg['max_secondi_freschezza']}s | Visti {len(gia_visti)}")
+    await ctx.send(f"âï¸ V19 | ð§ð¥ {cfg['sotto_prezzo_min']}â¬ | ð¥ð¥ {cfg['guadagno_banger']}â¬ | ð´ð¥ {cfg['guadagno_mostro']}â¬ | ð£ð¥ {cfg['guadagno_super_mostro']}â¬ | Cuori: {cfg['min_cuori_validazione']}+ â¤ï¸ | Spedizione {cfg['spedizione']}â¬ | Freschi {cfg['max_secondi_freschezza']}s | Visti {len(gia_visti)}")
 
 @bot.command()
 async def prezzo(ctx, *, nome_oggetto=""):
@@ -589,11 +659,11 @@ async def prezzo(ctx, *, nome_oggetto=""):
         return
     m = analizza_mercato_vendita(nome_oggetto)
     if m:
-        flag_str = f" âš ï¸ {m['flag'].replace('_', ' ')}" if m.get("flag") else ""
+        flag_str = f" â ï¸ {m['flag'].replace('_', ' ')}" if m.get("flag") else ""
         val_str = f" | â¤ï¸ {m.get('validati', 0)} validati" if m.get("validati", 0) > 0 else ""
-        await ctx.send(f"ðŸ’° {nome_oggetto} â†’ {m['valore']}â‚¬ (range: {m['min']}-{m['max']}â‚¬ su {m['count']}){val_str}{flag_str}")
+        await ctx.send(f"ð° {nome_oggetto} â {m['valore']}â¬ (range: {m['min']}-{m['max']}â¬ su {m['count']}){val_str}{flag_str}")
     else:
-        await ctx.send("Non trovo abbastanza annunci validati")
+        await ctx.send("Non trovo abbastanza annunci validati â¤ï¸")
 
 @bot.command()
 async def vendi(ctx, *, nome_oggetto=""):
@@ -601,11 +671,11 @@ async def vendi(ctx, *, nome_oggetto=""):
         await ctx.send("!vendi lacoste polo + foto")
         return
     r = genera_descrizione_vendita(nome_oggetto)
-    embed = discord.Embed(title=f"ðŸ“¦ {r['titolo_seo'][:50]}", description=f"```{r['descrizione'][:1000]}```", color=0x00ff88)
+    embed = discord.Embed(title=f"ð¦ {r['titolo_seo'][:50]}", description=f"```{r['descrizione'][:1000]}```", color=0x00ff88)
     if r["mercato"]:
-        flag_str = f" âš ï¸ {r['mercato']['flag'].replace('_', ' ')}" if r["mercato"].get("flag") else ""
+        flag_str = f" â ï¸ {r['mercato']['flag'].replace('_', ' ')}" if r["mercato"].get("flag") else ""
         val_str = f"\nâ¤ï¸ {r['mercato'].get('validati', 0)} validati (5+ cuori)" if r["mercato"].get("validati", 0) > 0 else ""
-        embed.add_field(name="ðŸ’° Mercato", value=f"{r['mercato']['valore']}â‚¬ (range: {r['mercato']['min']}-{r['mercato']['max']}â‚¬ su {r['mercato']['count']}){val_str}{flag_str}\nâš¡ Veloce: {r['prezzo_veloce']}â‚¬ | Max: {r['prezzo_massimo']}â‚¬")
+        embed.add_field(name="ð° Mercato", value=f"{r['mercato']['valore']}â¬ (range: {r['mercato']['min']}-{r['mercato']['max']}â¬ su {r['mercato']['count']}){val_str}{flag_str}\nâ¡ Veloce: {r['prezzo_veloce']}â¬ | Max: {r['prezzo_massimo']}â¬")
     await ctx.send(embed=embed)
 
 @bot.command()
@@ -638,7 +708,7 @@ async def on_message(message):
         return
     if isinstance(message.channel, discord.DMChannel):
         ha_foto = len(message.attachments) > 0
-        if not ha_foto and any(k in message.content.lower() for k in ["quella foto", "quella", "vedi l'immagine", "giÃ  mandata", "usa quella"]):
+        if not ha_foto and any(k in message.content.lower() for k in ["quella foto", "quella", "vedi l'immagine", "gia mandata", "usa quella"]):
             if message.author.id in last_photo_per_user:
                 ha_foto = True
         async with message.channel.typing():
@@ -722,6 +792,8 @@ async def controllo_vinted():
                     mercato = analizza_mostro(titolo, brand, prezzo, condizione_item, brand, size_item)
                     if not mercato:
                         continue
+                    if mercato["count"] < 5:
+                        continue
 
                     valore = mercato["valore"]
                     diff = valore - prezzo
@@ -729,15 +801,15 @@ async def controllo_vinted():
                     sconto = (diff / valore * 100) if valore > 0 else 0
                     roi = (diff / prezzo * 100) if prezzo > 0 else 0
 
-                    # === DEVE ESSERE ALMENO 15â‚¬ SOTTO ===
                     if diff < sotto_prezzo_min:
                         continue
 
-                    # === PLAUSIBILITÃ€ ===
                     flag = mercato.get("flag")
                     campione_piccolo = mercato["count"] < 10
-                    troppo_bello = netto > 2 * prezzo
                     campione_mini = mercato["count"] < 7
+                    diff_min_proporzionale = max(sotto_prezzo_min, prezzo * 0.8) if prezzo < 50 else max(sotto_prezzo_min, prezzo * 0.45)
+                    troppo_bello = netto > 2 * prezzo
+                    diff_insufficiente = diff < diff_min_proporzionale
 
                     num_flag = 0
                     if campione_piccolo:
@@ -751,7 +823,6 @@ async def controllo_vinted():
                     if num_flag >= 2:
                         continue
 
-                    # Soglie dinamiche
                     soglia_base = sotto_prezzo_min
                     soglia_banger = cfg.get("guadagno_banger", 20)
                     soglia_mostro = cfg.get("guadagno_mostro", 25)
@@ -768,25 +839,28 @@ async def controllo_vinted():
                         soglia_mostro += 3
                         soglia_super += 3
 
+                    if diff_insufficiente:
+                        continue
+
                     if netto < soglia_base:
                         continue
 
-                    # === LIVELLO + EMOJI ===
+                    # === LIVELLO + EMOJI DI SEMPRE ð¥ð¸ ===
                     if netto >= soglia_super:
                         livello = "super_mostro"
-                        emoji = "ðŸŸ£ðŸ”¥ðŸ”¥ðŸ”¥ðŸ’¸ðŸ’¸ðŸ’¸"
-                        ping = "@everyone ðŸŸ£ðŸ”¥ 30â‚¬+ NETTI!"
+                        emoji = "ð£ð¥ð¥ð¥ð¸ð¸ð¸"
+                        ping = "@everyone ð£ð¥ 30â¬+ NETTI!"
                     elif netto >= soglia_mostro:
                         livello = "mostro"
-                        emoji = "ðŸ”´ðŸ”¥ðŸ”¥ðŸ’¸ðŸ’¸"
-                        ping = "@here ðŸ”´ðŸ”¥ 25â‚¬+ NETTI!"
+                        emoji = "ð´ð¥ð¥ð¸ð¸"
+                        ping = "@here ð´ð¥ 25â¬+ NETTI!"
                     elif netto >= soglia_banger:
                         livello = "banger"
-                        emoji = "ðŸ’¥ðŸ”¥ðŸ’¸"
+                        emoji = "ð¥ð¥ð¸"
                         ping = ""
                     else:
                         livello = "accettabile"
-                        emoji = "ðŸ’§ðŸ”¥"
+                        emoji = "ð§ð¥"
                         ping = ""
 
                     link = f"https://www.vinted.it/items/{iid}"
@@ -807,30 +881,30 @@ async def controllo_vinted():
 
                         flag_text = ""
                         if flag:
-                            flag_text += f"\nâš ï¸ {flag.replace('_', ' ')}"
+                            flag_text += f"\nâ ï¸ {flag.replace('_', ' ')}"
                         if campione_piccolo:
-                            flag_text += "\nâš ï¸ CAMPIONE PICCOLO"
+                            flag_text += "\nâ ï¸ CAMPIONE PICCOLO"
                         if troppo_bello:
-                            flag_text += "\nâš ï¸ VERIFICARE MANUALMENTE"
+                            flag_text += "\nâ ï¸ VERIFICARE MANUALMENTE"
                         if mercato.get("is_card"):
-                            flag_text += "\nðŸƒ Carta: verifica variante"
+                            flag_text += "\nð Carta: verifica variante"
 
-                        titolo_embed = f"{emoji} {round(netto)}â‚¬ NETTI: {titolo[:45]}"
+                        titolo_embed = f"{emoji} {round(netto)}â¬ NETTI: {titolo[:45]}"
                         embed = discord.Embed(
                             title=titolo_embed,
                             description=(f"**Brand:** {brand} ({b_detect})\n"
-                                        f"**Acquisto:** {prezzo}â‚¬ | **Rivendita:** {valore}â‚¬\n"
-                                        f"**NETTO: {round(netto)}â‚¬** | Sotto prezzo: {round(diff)}â‚¬ | ROI {round(roi)}%\n"
-                                        f"ðŸ“¦ {size_item} | {condizione_item}\n"
-                                        f"â¤ï¸ Confronto su {mercato['count']} annunci (5+ cuori: {mercato['validati_cuori']})\n"
-                                        f"ðŸ“Š Range: {mercato['min']}-{mercato['max']}â‚¬ | Totale: {mercato['count_totali']} annunci"
+                                        f"**Acquisto:** {prezzo}â¬ | **Rivendita:** {valore}â¬\n"
+                                        f"**NETTO: {round(netto)}â¬** | Sotto prezzo: {round(diff)}â¬ | ROI {round(roi)}%\n"
+                                        f"ð¦ {size_item} | {condizione_item}\n"
+                                        f"â¤ï¸ Confronto su {mercato['count']} annunci (5+ cuori: {mercato['validati_cuori']}) â¤ï¸\n"
+                                        f"ð Range: {mercato['min']}-{mercato['max']}â¬ | Totale: {mercato['count_totali']} annunci"
                                         f"{flag_text}\n"
-                                        f"[ðŸ‘‰ PRENDI!]({link})"),
+                                        f"[ð PRENDI!]({link})"),
                             color=color
                         )
                         if foto:
                             embed.set_image(url=foto)
-                        embed.set_footer(text=f"V16b | {b_detect} | Netto {round(netto)}â‚¬ | Cuori item: {cuori_item}")
+                        embed.set_footer(text=f"V19 | {b_detect} | Netto {round(netto)}â¬ | Cuori item: {cuori_item} â¤ï¸")
                         await canale.send(content=ping, embed=embed)
 
                 if len(gia_visti) % 20 == 0:
@@ -849,7 +923,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Bot V16bb - Cuori 5+ | Brand match | Condizioni IT | Sotto prezzo 15â‚¬"
+    return "Bot V19b - Cuori 5+ â¤ï¸ | Brand match | Condizioni IT | Sotto prezzo 15â¬ ð¥ð¸"
 
 def run_flask():
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
@@ -861,3 +935,4 @@ if __name__ == "__main__":
     tok = os.getenv("DISCORD_TOKEN")
     if tok:
         bot.run(tok)
+
