@@ -223,11 +223,11 @@ COND_MEDIE = ["buone","buono","good","discrete"]
 COND_BASSE = ["sufficiente","fair","scarso"]
 
 COND_EMOJI = {
-    "top": "â¨ð¥",
-    "buone": "âð",
-    "medie": "ðð",
-    "basse": "â ï¸ð",
-    "sconosciuta": "â"
+    "top": "✨🔥",
+    "buone": "✅💎",
+    "medie": "👌👕",
+    "basse": "⚠️👎",
+    "sconosciuta": "❓"
 }
 
 # Moltiplicatore prezzo per condizione: un articolo Buone vale meno di Nuovo!
@@ -366,7 +366,7 @@ def analizza_mostro(titolo, brand_input, prezzo_acquisto=None, condizione_item="
             if len(stessi_brand) >= 4:
                 tutti_annunci = stessi_brand
 
-        # ð¥ FIX CONDIZIONI: filtra solo stessa condizione + emoji + multiplier
+        # 🔥 FIX CONDIZIONI: filtra solo stessa condizione + emoji + multiplier
         tier_item = condizione_tier(condizione_item)
         if condizione_item:
             simili_cond = [a for a in tutti_annunci if condizioni_simili(a["status"], condizione_item)]
@@ -434,7 +434,7 @@ def analizza_mostro(titolo, brand_input, prezzo_acquisto=None, condizione_item="
 
         valore_riferimento = statistics.median(prezzi_validati)
 
-        # ð¥ CONTROLLO PREZZO IN BASE A CONDIZIONE: Buone/Medie valgono meno!
+        # 🔥 CONTROLLO PREZZO IN BASE A CONDIZIONE: Buone/Medie valgono meno!
         # Se stai comparando un articolo in condizioni "Buone" vs mercato "Ottime", abbassa il valore di riferimento
         multiplier = COND_MULTIPLIER.get(tier_item, 0.80)
         valore_corretto_condizione = round(valore_riferimento * multiplier, 2) if tier_item != "top" else valore_riferimento
@@ -452,13 +452,13 @@ def analizza_mostro(titolo, brand_input, prezzo_acquisto=None, condizione_item="
             "is_card": is_card_item,
             "validati_cuori": len([a for a in validati if a["cuori"] >= min_cuori]),
             "condizione": tier_item,
-            "emoji_cond": COND_EMOJI.get(tier_item, "â"),
+            "emoji_cond": COND_EMOJI.get(tier_item, "❓"),
             "multiplier": multiplier
         }
         set_cache_analisi(cache_key, result)
         return result
     except Exception as e:
-        print(f"ð¥ Errore analisi mercato: {e}")
+        print(f"🔥 Errore analisi mercato: {e}")
         return None
 
 def analizza_mercato_vendita(titolo, use_cache=True):
@@ -525,7 +525,7 @@ def genera_descrizione_vendita(nome, brand_detected=""):
     titolo = nome.title()
     if brand and brand.lower() not in nome.lower():
         titolo = f"{brand.title()} {titolo}"
-    desc = f"ð¥ {titolo} ð¥\nâ Brand {brand.title() if brand else 'Originale'} 9/10\nð¦ Spedizione 24h tracciata"
+    desc = f"🔥 {titolo} 🔥\n✅ Brand {brand.title() if brand else 'Originale'} 9/10\n📦 Spedizione 24h tracciata"
     return {"titolo_seo": titolo, "descrizione": desc, "prezzo_veloce": veloce, "prezzo_massimo": maxp, "mercato": merc, "brand": brand}
 
 def studia_confronto(lista):
@@ -562,29 +562,29 @@ def risposta_chat_infinita(user_id, messaggio, ha_foto=False):
         if merc:
             flag_str = ""
             if merc.get("flag"):
-                flag_str = f"\nâ ï¸ {merc['flag'].replace('_', ' ')}"
-            validati_str = f"\nâ¤ï¸ {merc.get('validati', 0)} annunci validati (5+ cuori)" if merc.get("validati", 0) > 0 else ""
+                flag_str = f"\n⚠️ {merc['flag'].replace('_', ' ')}"
+            validati_str = f"\n❤️ {merc.get('validati', 0)} annunci validati (5+ cuori)" if merc.get("validati", 0) > 0 else ""
             is_card_item = is_card(nome, brand_det or "")
             card_str = ""
             if is_card_item:
                 variante = detect_card_variant(nome)
-                card_str = f"\nð Carta: variante {variante}"
-            risposta = (f"ð¸ **{result['titolo_seo']}**\n"
-                       f"ð Valore mercato: **{merc['valore']}â¬** (range: {merc['min']}-{merc['max']}â¬ su {merc['count']} annunci)"
+                card_str = f"\n🃏 Carta: variante {variante}"
+            risposta = (f"📸 **{result['titolo_seo']}**\n"
+                       f"📊 Valore mercato: **{merc['valore']}€** (range: {merc['min']}-{merc['max']}€ su {merc['count']} annunci)"
                        f"{validati_str}{card_str}{flag_str}\n\n"
-                       f"â¡ Prezzo veloce: {result['prezzo_veloce']}â¬ | Max: {result['prezzo_massimo']}â¬\n\n"
+                       f"⚡ Prezzo veloce: {result['prezzo_veloce']}€ | Max: {result['prezzo_massimo']}€\n\n"
                        f"Vuoi la descrizione? Scrivi `!vendi {nome}`")
         else:
-            risposta = f"ð¸ Foto {nome} ricevuta! Non trovo abbastanza annunci validati (5+ cuori). Dimmi brand e modello precisi. ð"
+            risposta = f"📸 Foto {nome} ricevuta! Non trovo abbastanza annunci validati (5+ cuori). Dimmi brand e modello precisi. 🔍"
 
     elif any(x in msg_lower for x in ["non trovo", "sta a cerca", "stai cercando", "cerchi", "sniper", "offert"]):
-        risposta = (f"â **Bot attivo** ð¥\n"
-                    f"ð Scansione ogni 1.2s su {len(cfg['user_brands'])} brand\n"
-                    f"â±ï¸ Solo freschi (max {cfg['max_secondi_freschezza']}s)\n"
-                    f"â¤ï¸ Confronto con annunci 5+ cuori\n"
-                    f"ð§ Controllo prezzo per condizione: â¨ Top 100% | â Buone 85% | ð Medie 68% | â ï¸ Basse 45%\n"
-                    f"ð° Sotto prezzo min: {cfg['sotto_prezzo_min']}â¬\n"
-                    f"ð Visti: {len(gia_visti)}")
+        risposta = (f"✅ **Bot attivo** 🔥\n"
+                    f"🔄 Scansione ogni 1.2s su {len(cfg['user_brands'])} brand\n"
+                    f"⏱️ Solo freschi (max {cfg['max_secondi_freschezza']}s)\n"
+                    f"❤️ Confronto con annunci 5+ cuori\n"
+                    f"🧐 Controllo prezzo per condizione: ✨ Top 100% | ✅ Buone 85% | 👌 Medie 68% | ⚠️ Basse 45%\n"
+                    f"💰 Sotto prezzo min: {cfg['sotto_prezzo_min']}€\n"
+                    f"👀 Visti: {len(gia_visti)}")
 
     elif any(x in msg_lower for x in ["secondo te", "come e meglio", "quale e meglio", "consigliami", "quale conviene"]):
         all_text = " ".join([h.get("content", "") for h in user_history[-6:]]) + " " + messaggio
@@ -595,44 +595,44 @@ def risposta_chat_infinita(user_id, messaggio, ha_foto=False):
         if len(oggetti) < 2:
             oggetti = ["lacoste polo", "ralph lauren polo", "dsquared2 t-shirt", "pokemon charizard"]
         risultati = studia_confronto(oggetti[:4])
-        txt = "ð§  **Confronto mercati:**\n\n"
+        txt = "🧠 **Confronto mercati:**\n\n"
         for i, r in enumerate(risultati):
             if r["mercato"]:
-                flag_str = f" â ï¸ {r['mercato']['flag'].replace('_', ' ')}" if r["mercato"].get("flag") else ""
-                val_str = f" | â¤ï¸ {r['mercato'].get('validati', 0)} validati" if r["mercato"].get("validati", 0) > 0 else ""
-                txt += f"**{i+1}. {r['nome'].title()}** â {r['mercato']['valore']}â¬ ({r['mercato']['count']} annunci){val_str}{flag_str}\n"
+                flag_str = f" ⚠️ {r['mercato']['flag'].replace('_', ' ')}" if r["mercato"].get("flag") else ""
+                val_str = f" | ❤️ {r['mercato'].get('validati', 0)} validati" if r["mercato"].get("validati", 0) > 0 else ""
+                txt += f"**{i+1}. {r['nome'].title()}** → {r['mercato']['valore']}€ ({r['mercato']['count']} annunci){val_str}{flag_str}\n"
         if risultati:
-            txt += f"\nð **Top: {risultati[0]['nome'].title()}** a {risultati[0]['mercato']['valore']}â¬ ð"
+            txt += f"\n👉 **Top: {risultati[0]['nome'].title()}** a {risultati[0]['mercato']['valore']}€ 🏆"
         risposta = txt
 
     elif any(x in msg_lower for x in ["filtr", "guadagno", "config", "soglie", "impostazioni"]):
-        risposta = (f"âï¸ **Config V20 EMOJI+CONDIZIONI:**\n"
-                    f"â¢ Sotto prezzo min: {cfg['sotto_prezzo_min']}â¬\n"
-                    f"â¢ Soglie: ð§ð¥ {cfg['sotto_prezzo_min']}â¬ | ð¥ð¥ {cfg['guadagno_banger']}â¬ | ð´ð¥ {cfg['guadagno_mostro']}â¬ | ð£ð¥ {cfg['guadagno_super_mostro']}â¬\n"
-                    f"â¢ Cuori min validazione: {cfg['min_cuori_validazione']}\n"
-                    f"â¢ Freschi max: {cfg['max_secondi_freschezza']}s\n"
-                    f"â¢ Spedizione: {cfg['spedizione']}â¬\n"
-                    f"â¢ Controllo condizione: â¨ Top 100% | â 85% | ð 68% | â ï¸ 45%\n"
-                    f"â¢ Brand: {', '.join(cfg['user_brands'])}\n"
-                    f"â¢ Visti: {len(gia_visti)}")
+        risposta = (f"⚙️ **Config V20 EMOJI+CONDIZIONI:**\n"
+                    f"• Sotto prezzo min: {cfg['sotto_prezzo_min']}€\n"
+                    f"• Soglie: 💧🔥 {cfg['sotto_prezzo_min']}€ | 💥🔥 {cfg['guadagno_banger']}€ | 🔴🔥 {cfg['guadagno_mostro']}€ | 🟣🔥 {cfg['guadagno_super_mostro']}€\n"
+                    f"• Cuori min validazione: {cfg['min_cuori_validazione']}\n"
+                    f"• Freschi max: {cfg['max_secondi_freschezza']}s\n"
+                    f"• Spedizione: {cfg['spedizione']}€\n"
+                    f"• Controllo condizione: ✨ Top 100% | ✅ 85% | 👌 68% | ⚠️ 45%\n"
+                    f"• Brand: {', '.join(cfg['user_brands'])}\n"
+                    f"• Visti: {len(gia_visti)}")
 
     else:
         if brand_det:
             m = analizza_mercato_vendita(messaggio)
             if m:
-                flag_str = f"\nâ ï¸ {m['flag'].replace('_', ' ')}" if m.get("flag") else ""
-                validati_str = f"\nâ¤ï¸ {m.get('validati', 0)} validati (5+ cuori)" if m.get("validati", 0) > 0 else ""
-                risposta = (f"ð **{messaggio.title()}**\n"
-                           f"ð° Valore: {m['valore']}â¬ (range: {m['min']}-{m['max']}â¬ su {m['count']})"
+                flag_str = f"\n⚠️ {m['flag'].replace('_', ' ')}" if m.get("flag") else ""
+                validati_str = f"\n❤️ {m.get('validati', 0)} validati (5+ cuori)" if m.get("validati", 0) > 0 else ""
+                risposta = (f"📊 **{messaggio.title()}**\n"
+                           f"💰 Valore: {m['valore']}€ (range: {m['min']}-{m['max']}€ su {m['count']})"
                            f"{validati_str}{flag_str}\n\n"
-                           f"Scrivi `!vendi {messaggio}` per la descrizione âï¸")
+                           f"Scrivi `!vendi {messaggio}` per la descrizione ✍️")
             else:
-                risposta = f"Ho riconosciuto **{brand_det.title()}** ð ma non trovo abbastanza annunci validati. Dimmi il modello preciso. ð"
+                risposta = f"Ho riconosciuto **{brand_det.title()}** 👀 ma non trovo abbastanza annunci validati. Dimmi il modello preciso. 🔍"
         else:
-            risposta = ("ð¤ Bot Vinted V20 ð¥\n"
-                       "Mandami una **foto** ð¸ + nome per analisi prezzo\n"
-                       "Comandi: `!vendi`, `!prezzo`, `!migliora` â¨\n"
-                       "Dimmi `config` per le soglie âï¸")
+            risposta = ("🤖 Bot Vinted V20 🔥\n"
+                       "Mandami una **foto** 📸 + nome per analisi prezzo\n"
+                       "Comandi: `!vendi`, `!prezzo`, `!migliora` ✨\n"
+                       "Dimmi `config` per le soglie ⚙️")
 
     user_history.append({"role": "assistant", "content": risposta, "time": str(datetime.datetime.now())})
     if len(user_history) > 30:
@@ -645,7 +645,7 @@ def risposta_chat_infinita(user_id, messaggio, ha_foto=False):
 async def on_ready():
     carica_visti()
     cfg = carica_config()
-    print(f"ð¥ Bot V20 EMOJI+CONDIZIONI - Cuori {cfg['min_cuori_validazione']}+ | Sotto prezzo {cfg['sotto_prezzo_min']}â¬ | Mostro {cfg['guadagno_mostro']}/{cfg['guadagno_super_mostro']}â¬ | Freschi {cfg['max_secondi_freschezza']}s | {bot.user} â¨")
+    print(f"🔥 Bot V20 EMOJI+CONDIZIONI - Cuori {cfg['min_cuori_validazione']}+ | Sotto prezzo {cfg['sotto_prezzo_min']}€ | Mostro {cfg['guadagno_mostro']}/{cfg['guadagno_super_mostro']}€ | Freschi {cfg['max_secondi_freschezza']}s | {bot.user} ✨")
     controllo_vinted.start()
 
 @bot.command()
@@ -654,7 +654,7 @@ async def filtro(ctx, azione=None, *, args=""):
     if azione == "add":
         parti = args.rsplit(" ", 1)
         if len(parti) != 2:
-            await ctx.send("â Usa: !filtro add lacoste 35 ð")
+            await ctx.send("❌ Usa: !filtro add lacoste 35 📝")
             return
         kw, pr = parti[0].lower(), parti[1]
         try:
@@ -663,46 +663,46 @@ async def filtro(ctx, azione=None, *, args=""):
             return
         filtri.append({"keyword": kw, "max": pr})
         salva_filtri(filtri)
-        await ctx.send(f"â Aggiunto {kw} sotto {pr}â¬ ð°")
+        await ctx.send(f"✅ Aggiunto {kw} sotto {pr}€ 💰")
     else:
         cfg = carica_config()
-        await ctx.send(f"âï¸ Sotto prezzo {cfg['sotto_prezzo_min']}â¬ | Cuori min {cfg['min_cuori_validazione']} â¤ï¸ | Freschi {cfg['max_secondi_freschezza']}s â±ï¸ | Visti {len(gia_visti)} ð")
+        await ctx.send(f"⚙️ Sotto prezzo {cfg['sotto_prezzo_min']}€ | Cuori min {cfg['min_cuori_validazione']} ❤️ | Freschi {cfg['max_secondi_freschezza']}s ⏱️ | Visti {len(gia_visti)} 👀")
 
 @bot.command()
 async def config(ctx):
     cfg = carica_config()
-    await ctx.send(f"âï¸ V20 â¨ | ð§ð¥ {cfg['sotto_prezzo_min']}â¬ | ð¥ð¥ {cfg['guadagno_banger']}â¬ | ð´ð¥ {cfg['guadagno_mostro']}â¬ | ð£ð¥ {cfg['guadagno_super_mostro']}â¬ | Cuori: {cfg['min_cuori_validazione']}+ â¤ï¸ | Spedizione {cfg['spedizione']}â¬ ð¦ | Freschi {cfg['max_secondi_freschezza']}s â±ï¸ | Visti {len(gia_visti)} ð")
+    await ctx.send(f"⚙️ V20 ✨ | 💧🔥 {cfg['sotto_prezzo_min']}€ | 💥🔥 {cfg['guadagno_banger']}€ | 🔴🔥 {cfg['guadagno_mostro']}€ | 🟣🔥 {cfg['guadagno_super_mostro']}€ | Cuori: {cfg['min_cuori_validazione']}+ ❤️ | Spedizione {cfg['spedizione']}€ 📦 | Freschi {cfg['max_secondi_freschezza']}s ⏱️ | Visti {len(gia_visti)} 👀")
 
 @bot.command()
 async def prezzo(ctx, *, nome_oggetto=""):
     if not nome_oggetto:
-        await ctx.send("ð° !prezzo lacoste polo ð")
+        await ctx.send("💰 !prezzo lacoste polo 👕")
         return
     m = analizza_mercato_vendita(nome_oggetto)
     if m:
-        flag_str = f" â ï¸ {m['flag'].replace('_', ' ')}" if m.get("flag") else ""
-        val_str = f" | â¤ï¸ {m.get('validati', 0)} validati" if m.get("validati", 0) > 0 else ""
-        await ctx.send(f"ð° {nome_oggetto} â {m['valore']}â¬ (range: {m['min']}-{m['max']}â¬ su {m['count']}){val_str}{flag_str} ð")
+        flag_str = f" ⚠️ {m['flag'].replace('_', ' ')}" if m.get("flag") else ""
+        val_str = f" | ❤️ {m.get('validati', 0)} validati" if m.get("validati", 0) > 0 else ""
+        await ctx.send(f"💰 {nome_oggetto} → {m['valore']}€ (range: {m['min']}-{m['max']}€ su {m['count']}){val_str}{flag_str} 📊")
     else:
-        await ctx.send("â Non trovo abbastanza annunci validati ð")
+        await ctx.send("❌ Non trovo abbastanza annunci validati 🔍")
 
 @bot.command()
 async def vendi(ctx, *, nome_oggetto=""):
     if not nome_oggetto:
-        await ctx.send("âï¸ !vendi lacoste polo + foto ð¸")
+        await ctx.send("✍️ !vendi lacoste polo + foto 📸")
         return
     r = genera_descrizione_vendita(nome_oggetto)
-    embed = discord.Embed(title=f"ð¦ {r['titolo_seo'][:50]} â¨", description=f"```{r['descrizione'][:1000]}```", color=0x00ff88)
+    embed = discord.Embed(title=f"📦 {r['titolo_seo'][:50]} ✨", description=f"```{r['descrizione'][:1000]}```", color=0x00ff88)
     if r["mercato"]:
-        flag_str = f" â ï¸ {r['mercato']['flag'].replace('_', ' ')}" if r["mercato"].get("flag") else ""
-        val_str = f"\nâ¤ï¸ {r['mercato'].get('validati', 0)} validati (5+ cuori)" if r["mercato"].get("validati", 0) > 0 else ""
-        embed.add_field(name="ð° Mercato ð", value=f"{r['mercato']['valore']}â¬ (range: {r['mercato']['min']}-{r['mercato']['max']}â¬ su {r['mercato']['count']}){val_str}{flag_str}\nâ¡ Veloce: {r['prezzo_veloce']}â¬ | Max: {r['prezzo_massimo']}â¬")
+        flag_str = f" ⚠️ {r['mercato']['flag'].replace('_', ' ')}" if r["mercato"].get("flag") else ""
+        val_str = f"\n❤️ {r['mercato'].get('validati', 0)} validati (5+ cuori)" if r["mercato"].get("validati", 0) > 0 else ""
+        embed.add_field(name="💰 Mercato 📊", value=f"{r['mercato']['valore']}€ (range: {r['mercato']['min']}-{r['mercato']['max']}€ su {r['mercato']['count']}){val_str}{flag_str}\n⚡ Veloce: {r['prezzo_veloce']}€ | Max: {r['prezzo_massimo']}€")
     await ctx.send(embed=embed)
 
 @bot.command()
 async def migliora(ctx):
     if not ctx.message.attachments:
-        await ctx.send("ð¸ Mandami una foto con `!migliora` â¨")
+        await ctx.send("📸 Mandami una foto con `!migliora` ✨")
         return
     try:
         foto_url = ctx.message.attachments[0].url
@@ -716,7 +716,7 @@ async def migliora(ctx):
         buf.seek(0)
         await ctx.send(file=discord.File(buf, filename="migliorata.jpg"))
     except Exception as e:
-        await ctx.send(f"â Errore: {e} ð¢")
+        await ctx.send(f"❌ Errore: {e} 😢")
 
 @bot.event
 async def on_message(message):
@@ -814,7 +814,7 @@ async def controllo_vinted():
                     if mercato["count"] < 5:
                         continue
 
-                    # ð¥ USA VALORE CORRETTO PER CONDIZIONE!
+                    # 🔥 USA VALORE CORRETTO PER CONDIZIONE!
                     valore = mercato["valore_condizione"]
                     valore_mercato_grezzo = mercato["valore"]
                     diff = valore - prezzo
@@ -867,25 +867,25 @@ async def controllo_vinted():
                         continue
 
                     # Emoji per condizione
-                    emoji_cond = mercato.get("emoji_cond", "â")
+                    emoji_cond = mercato.get("emoji_cond", "❓")
                     cond_text = mercato.get("condizione", "sconosciuta")
                     multiplier = mercato.get("multiplier", 1.0)
 
                     if netto >= soglia_super:
                         livello = "super_mostro"
-                        emoji = "ð£ð¥ð¥ð¥ð¸ð¸ð¸"
-                        ping = "@everyone ð£ð¥ 30â¬+ NETTI! ð"
+                        emoji = "🟣🔥🔥🔥💸💸💸"
+                        ping = "@everyone 🟣🔥 30€+ NETTI! 🚀"
                     elif netto >= soglia_mostro:
                         livello = "mostro"
-                        emoji = "ð´ð¥ð¥ð¸ð¸"
-                        ping = "@here ð´ð¥ 25â¬+ NETTI! ð¥"
+                        emoji = "🔴🔥🔥💸💸"
+                        ping = "@here 🔴🔥 25€+ NETTI! 💥"
                     elif netto >= soglia_banger:
                         livello = "banger"
-                        emoji = "ð¥ð¥ð¸"
+                        emoji = "💥🔥💸"
                         ping = ""
                     else:
                         livello = "accettabile"
-                        emoji = "ð§ð¥"
+                        emoji = "💧🔥"
                         ping = ""
 
                     link = f"https://www.vinted.it/items/{iid}"
@@ -906,48 +906,48 @@ async def controllo_vinted():
 
                         flag_text = ""
                         if flag:
-                            flag_text += f"\nâ ï¸ {flag.replace('_', ' ')}"
+                            flag_text += f"\n⚠️ {flag.replace('_', ' ')}"
                         if campione_piccolo:
-                            flag_text += "\nâ ï¸ CAMPIONE PICCOLO ð"
+                            flag_text += "\n⚠️ CAMPIONE PICCOLO 🔍"
                         if troppo_bello:
-                            flag_text += "\nâ ï¸ VERIFICARE MANUALMENTE ð"
+                            flag_text += "\n⚠️ VERIFICARE MANUALMENTE 👀"
                         if mercato.get("is_card"):
-                            flag_text += "\nð Carta: verifica variante ð´"
+                            flag_text += "\n🃏 Carta: verifica variante 🎴"
 
-                        titolo_embed = f"{emoji} {round(netto)}â¬ NETTI: {titolo[:45]} {emoji_cond}"
+                        titolo_embed = f"{emoji} {round(netto)}€ NETTI: {titolo[:45]} {emoji_cond}"
                         embed = discord.Embed(
                             title=titolo_embed,
                             description=(f"**Brand:** {brand} ({b_detect})\n"
-                                        f"**Acquisto:** {prezzo}â¬ ð | **Rivendita corretta per condizione:** {valore}â¬ {emoji_cond} (grezzo {valore_mercato_grezzo}â¬)\n"
-                                        f"**NETTO: {round(netto)}â¬** ð° | Sotto prezzo: {round(diff)}â¬ | ROI {round(roi)}% ð\n"
-                                        f"ð¦ {size_item} | {emoji_cond} {condizione_item} ({cond_text} x{multiplier})\n"
-                                        f"â¤ï¸ Confronto su {mercato['count']} annunci (5+ cuori: {mercato['validati_cuori']})\n"
-                                        f"ð Range: {mercato['min']}-{mercato['max']}â¬ | Totale: {mercato['count_totali']} annunci"
+                                        f"**Acquisto:** {prezzo}€ 🛒 | **Rivendita corretta per condizione:** {valore}€ {emoji_cond} (grezzo {valore_mercato_grezzo}€)\n"
+                                        f"**NETTO: {round(netto)}€** 💰 | Sotto prezzo: {round(diff)}€ | ROI {round(roi)}% 📈\n"
+                                        f"📦 {size_item} | {emoji_cond} {condizione_item} ({cond_text} x{multiplier})\n"
+                                        f"❤️ Confronto su {mercato['count']} annunci (5+ cuori: {mercato['validati_cuori']})\n"
+                                        f"📊 Range: {mercato['min']}-{mercato['max']}€ | Totale: {mercato['count_totali']} annunci"
                                         f"{flag_text}\n"
-                                        f"[ð PRENDI SUBITO! ð]({link})"),
+                                        f"[👉 PRENDI SUBITO! 🚀]({link})"),
                             color=color
                         )
                         if foto:
                             embed.set_image(url=foto)
-                        embed.set_footer(text=f"ð¥ V20 {emoji_cond} | {b_detect} | Netto {round(netto)}â¬ | Cond: {cond_text} | Cuori item: {cuori_item} â¤ï¸")
+                        embed.set_footer(text=f"🔥 V20 {emoji_cond} | {b_detect} | Netto {round(netto)}€ | Cond: {cond_text} | Cuori item: {cuori_item} ❤️")
                         await canale.send(content=ping, embed=embed)
 
                 if len(gia_visti) % 20 == 0:
                     salva_visti()
                 await discord.utils.sleep_until(datetime.datetime.now() + datetime.timedelta(milliseconds=300))
             except Exception as e_inner:
-                print(f"ð scan err {e_inner} ð¢")
+                print(f"🔍 scan err {e_inner} 😢")
                 continue
         salva_visti()
     except Exception as e:
-        print(f"â Errore scan: {e} ð¥")
+        print(f"❌ Errore scan: {e} 💥")
 
 from flask import Flask
 app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "ð¥ Bot V20 EMOJI+CONDIZIONI - Cuori 5+ â¤ï¸ | Brand match | Condizioni IT ð | Sotto prezzo 15â¬ ð° | Controllo prezzo per condizione â¨"
+    return "🔥 Bot V20 EMOJI+CONDIZIONI - Cuori 5+ ❤️ | Brand match | Condizioni IT 👕 | Sotto prezzo 15€ 💰 | Controllo prezzo per condizione ✨"
 
 def run_flask():
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
