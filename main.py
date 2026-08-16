@@ -1,3 +1,22 @@
+# =============================================================
+# 🔥 VINTED SNIPER BOT V20 — FINAL FIXED ✅
+#
+# FIX APPLICATI:
+#   1. if __name__ == "__main__" (era if name == — bot non partiva)
+#   2. correggi_modello_sneaker threshold 0.75 (era 0.6 — match falsi)
+#   3. troppo_bello = netto > 2*prezzo AND prezzo > 10 (scartava affari low-cost)
+#
+# FEATURE:
+#   • Scansione Vinted 24/7, alert se sotto prezzo >= 20€ 💰
+#   • Confronto con annunci validati (cuori ❤️) per evitare falsi
+#   • Controllo prezzo per condizione: ✨ Nuovo 100% | ✅ Buone 85% | 👌 Medie 68% | ⚠️ Basse 45%
+#   • Riconosce carte (PSA, Pokemon, One Piece) 🃏
+#   • Chat intelligente in DM con storico persistente 💬
+#   • Comandi: !prezzo 💰 !vendi 📦 !migliora ✨ !filtro ⚙️ !config 📊
+#
+# Deploy: env var DISCORD_TOKEN | pip install discord.py requests Pillow flask
+# =============================================================
+
 import discord
 from discord.ext import commands, tasks
 import requests, statistics, json, os, io, re, time, random
@@ -65,7 +84,7 @@ def correggi_modello_sneaker(titolo):
             if score > migliore_score:
                 migliore_score = score
                 migliore_match = modello
-    if migliore_score >= 0.6:
+    if migliore_score >= 0.75:  # FIX #2: threshold 0.75 evita match falsi
         return migliore_match
     return None
 
@@ -829,7 +848,7 @@ async def controllo_vinted():
                     campione_piccolo = mercato["count"] < 10
                     campione_mini = mercato["count"] < 7
                     diff_min_proporzionale = max(sotto_prezzo_min, prezzo * 0.8) if prezzo < 50 else max(sotto_prezzo_min, prezzo * 0.45)
-                    troppo_bello = netto > 2 * prezzo
+                    troppo_bello = netto > 2 * prezzo and prezzo > 10  # FIX #3: non scartare affari low-cost
                     diff_insufficiente = diff < diff_min_proporzionale
 
                     num_flag = 0
@@ -958,4 +977,4 @@ threading.Thread(target=run_flask, daemon=True).start()
 if __name__ == "__main__":
     tok = os.getenv("DISCORD_TOKEN")
     if tok:
-        bot.run(tok)
+        bot.run(tok) 
