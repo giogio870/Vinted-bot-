@@ -823,7 +823,7 @@ async def resetta(ctx):
 
 @tasks.loop(seconds=2.5)
 async def controllo_vinted():
-    global ultimo_affare
+    global ultimo_affar 
     try:
         cfg=carica_config(); sess=get_session()
         headers={"User-Agent":random.choice(USER_AGENTS),"Accept":"application/json","Referer":"https://www.vinted.it/"}
