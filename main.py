@@ -1,4 +1,4 @@
-# 🔥 VINTED SNIPER BOT V21 CLEAN - 500 RIGHE + CHAT DM FULL
+# 🔥 VINTED SNIPER BOT V21.5 - STESSO BUONO DI 8H FA + CERVELLO MINIMO 🧠
 import discord, asyncio, requests, statistics, json, os, io, re, time, random, threading, difflib, datetime
 from discord.ext import commands, tasks
 from PIL import Image, ImageEnhance
@@ -11,7 +11,10 @@ intents.messages = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 FILTRI_FILE="filtri.json"; CONFIG_FILE="config.json"; CHAT_FILE="chat_storico.json"; VISTI_FILE="gia_visti.json"
+PREF_FILE="preferenze_utenti.json"; LEARNING_FILE="learning.json"
 gia_visti=set(); last_photo_per_user={}; cache_mercato={}; vinted_session=None; last_session_refresh=0
+ultimo_affare=None
+
 BRANDS_BUDGET=["lacoste","ralph lauren","dsquared","dsquared2","tommy hilfiger","fred perry","stone island","pokemon","charizard","psa","pikachu","nike","jordan","balenciaga","runner","dunk","polo"]
 TUTTI=list(set(BRANDS_BUDGET))
 CARD_KEYWORDS=["psa","topps","bowman","pokemon","charizard","refractor","graded","autograph","auto","/99","/25","/10","numbered","sapphire","chrome","piccolo","biglietto","carta"]
@@ -27,52 +30,60 @@ COND_MULTIPLIER={"top":1.0,"buone":0.85,"medie":0.68,"basse":0.45,"sconosciuta":
 
 app=Flask(__name__)
 @app.route("/")
-def home(): return "🔥 Bot V21 CLEAN — MAROB STYLE — 24H ALERT + DM CHAT"
+def home(): return "🔥 Bot V21.5 CLEAN — MAROB STYLE + CERVELLO"
 def run_flask(): app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
 
 def carica_config():
     default={"sotto_prezzo_min":22,"guadagno_mostro":32,"guadagno_super_mostro":45,"guadagno_banger":28,"spedizione":5,"max_secondi_freschezza":2,"min_cuori_validazione":12,"min_annunci_validati":5,"scan_brands":["lacoste","ralph lauren","dsquared2","stone island","pokemon","charizard","psa 10","nike dunk","jordan 1","balenciaga runner"],"user_brands":["lacoste","ralph lauren","dsquared","dsquared2","stone island","pokemon","charizard","nike","jordan"],"max_price_per_brand":{"lacoste":35,"ralph lauren":40,"dsquared":60,"dsquared2":60,"stone island":100,"pokemon":150,"charizard":200,"psa 10":300,"nike dunk":80,"jordan 1":100}}
     if os.path.exists(CONFIG_FILE):
         try:
-            import json
             with open(CONFIG_FILE,"r") as f: cfg=json.load(f); default.update(cfg); return default
         except: return default
     return default
 def salva_config(cfg):
-    import json
     with open(CONFIG_FILE,"w") as f: json.dump(cfg,f,indent=2)
 def carica_filtri():
     if os.path.exists(FILTRI_FILE):
         try:
-            import json
             with open(FILTRI_FILE,"r") as f: return json.load(f)
         except: return []
     return []
 def salva_filtri(filtri):
-    import json
     with open(FILTRI_FILE,"w") as f: json.dump(filtri,f,indent=2)
 def carica_chat():
     if os.path.exists(CHAT_FILE):
         try:
-            import json
             with open(CHAT_FILE,"r") as f: return json.load(f)
         except: return {}
     return {}
 def salva_chat(ch):
-    import json
     with open(CHAT_FILE,"w") as f: json.dump(ch,f,indent=2)
 def carica_visti():
     global gia_visti
     if os.path.exists(VISTI_FILE):
         try:
-            import json
             with open(VISTI_FILE,"r") as f: gia_visti=set(json.load(f))
         except: gia_visti=set()
 def salva_visti():
     try:
-        import json
         with open(VISTI_FILE,"w") as f: json.dump(list(gia_visti)[-5000:],f)
     except: pass
+def carica_pref():
+    if os.path.exists(PREF_FILE):
+        try:
+            with open(PREF_FILE,"r") as f: return json.load(f)
+        except: return {}
+    return {}
+def salva_pref(p):
+    with open(PREF_FILE,"w") as f: json.dump(p,f,indent=2)
+def carica_learning():
+    if os.path.exists(LEARNING_FILE):
+        try:
+            with open(LEARNING_FILE,"r") as f: return json.load(f)
+        except: return []
+    return []
+def salva_learning(l):
+    with open(LEARNING_FILE,"w") as f: json.dump(l[-200:],f,indent=2)
 
 def get_session():
     global vinted_session, last_session_refresh
@@ -131,7 +142,6 @@ def correggi_modello_sneaker(titolo):
             sc=difflib.SequenceMatcher(None,fr,modello).ratio()
             if sc>ms: ms=sc; mm=modello
     return mm if ms>=0.75 else None
-
 def condizione_tier(status):
     s=status.lower().strip()
     if not s: return "sconosciuta"
@@ -173,10 +183,6 @@ def get_cache(k):
     return None
 def set_cache(k,r):
     k=k.lower().strip(); _cache[k]=(r,time.time())
-    if len(_cache)>200:
-        now=time.time()
-        for ck in list(_cache.keys()):
-            if now-_cache[ck][1]>1800: del _cache[ck]
 
 def analizza_mostro(titolo,brand_input,prezzo_acquisto=None,condizione_item="",brand_title_api="",size_title=""):
     cfg=carica_config()
@@ -260,9 +266,7 @@ def analizza_mostro(titolo,brand_input,prezzo_acquisto=None,condizione_item="",b
         res={"valore":round(val_rif,2),"valore_condizione":round(val_corr,2),"media":round(statistics.mean(prezzi),2),"min":round(min(prezzi),2),"max":round(max(prezzi),2),"count":len(prezzi),"count_totali":len(tutti),"stabile":stab,"flag":flag,"is_card":is_card_item,"validati_cuori":len([a for a in valid if a["cuori"]>=min_cuori]),"condizione":tier,"emoji_cond":COND_EMOJI.get(tier,"❓"),"multiplier":mult}
         set_cache(ck,res)
         return res
-    except Exception as e:
-        print(f"Errore: {e}")
-        return None
+    except: return None
 
 cache_mercato={}
 def analizza_mercato_vendita(titolo,use_cache=True):
@@ -313,239 +317,170 @@ def genera_descrizione_vendita(nome,brand_detected=""):
     desc=f"🔥 {titolo} 🔥\n✅ Brand {brand.title() if brand else 'Originale'} 9/10\n📦 Spedizione 24h"
     return {"titolo_seo":titolo,"descrizione":desc,"prezzo_veloce":veloce,"prezzo_massimo":maxp,"mercato":merc,"brand":brand}
 
-def studia_confronto(lista):
-    ris=[]
-    for ogg in lista:
-        m=analizza_mercato_vendita(ogg)
-        if m: ris.append({"nome":ogg,"mercato":m})
-    ris=sorted(ris,key=lambda x: x["mercato"]["valore"] if x["mercato"] else 0,reverse=True)
-    return ris
-
-# =============================================================
-# CHAT DM FULL - CON STORICO PERSISTENTE
-# =============================================================
-
+# === CERVELLO MINIMO - POCHE RIGHE ===
 def risposta_chat_infinita(user_id, messaggio, ha_foto=False):
-    msg_lower=messaggio.lower().strip()
+    global ultimo_affare
+    ml=messaggio.lower().strip()
     storico=carica_chat()
-    user_history=storico.get(str(user_id), [])
+    uh=storico.get(str(user_id),[])
     if messaggio.strip():
-        user_history.append({"role":"user","content":messaggio,"time":str(datetime.datetime.now())})
-
+        uh.append({"role":"user","content":messaggio,"time":str(datetime.datetime.now())})
     cfg=carica_config()
+    pref=carica_pref()
+    up=pref.get(str(user_id),{"brands":[],"sizes":[],"temp_brand":None,"temp_size":None,"until":0,"liked":[],"disliked":[]})
     brand_det=detect_brand(messaggio)
 
-    # --- FOTO ---
+    # RESET
+    if any(x in ml for x in ["resetta","azzera filtri","togli filtri","torna normale"]):
+        pref[str(user_id)]={"brands":[],"sizes":[],"temp_brand":None,"temp_size":None,"until":0,"liked":[],"disliked":[]}
+        salva_pref(pref)
+        risposta="Fatto ✅ Azzerato — tutti gli affari di nuovo. Dimmi solo M o solo Stone Island quando vuoi filtrare"
+        uh.append({"role":"assistant","content":risposta,"time":str(datetime.datetime.now())})
+        storico[str(user_id)]=uh[-30:]; salva_chat(storico); return risposta
+
+    # BRAVO BOT - FEEDBACK POSITIVO
+    if any(x in ml for x in ["bravo bot","questi sono gli affari che cerco","vero affare","questo è un vero affare","grande bot","proprio quello che cerco"]):
+        learning=carica_learning()
+        if ultimo_affare:
+            learning.append({"type":"good","affare":ultimo_affare,"user":str(user_id),"time":str(datetime.datetime.now())})
+            salva_learning(learning)
+            up.setdefault("liked",[]).append(ultimo_affare.get("brand_detected",""))
+            pref[str(user_id)]=up; salva_pref(pref)
+            risposta=f"Grande fra! 🔥 Capito — ti piace {ultimo_affare['titolo'][:40]} netto {ultimo_affare['netto']}€. Lo salvo e cerco piu roba simile taglia {ultimo_affare.get('size','')} brand {ultimo_affare.get('brand_detected','')}"
+        else:
+            risposta="Grazie fra! Ho capito che questi sono gli affari che cerchi — salvo lo stile e mando piu roba simile"
+        uh.append({"role":"assistant","content":risposta,"time":str(datetime.datetime.now())})
+        storico[str(user_id)]=uh[-30:]; salva_chat(storico); return risposta
+
+    # QUESTO NON E UN AFFARE
+    if any(x in ml for x in ["questo non è un affare","non è un affare","non mi interessa","non mi piace"]):
+        learning=carica_learning()
+        if ultimo_affare:
+            learning.append({"type":"bad","affare":ultimo_affare,"user":str(user_id),"time":str(datetime.datetime.now())})
+            salva_learning(learning)
+            up.setdefault("disliked",[]).append(ultimo_affare.get("brand_detected",""))
+            pref[str(user_id)]=up; salva_pref(pref)
+            risposta=f"Ok ❌ Scarto {ultimo_affare['titolo'][:30]} — imparato, non te lo mando piu"
+        else:
+            risposta="Ok dimmi cosa non ti piace — marca o taglia? Scrivi non voglio piu M"
+        uh.append({"role":"assistant","content":risposta,"time":str(datetime.datetime.now())})
+        storico[str(user_id)]=uh[-30:]; salva_chat(storico); return risposta
+
+    # VOGLIO SOLO TAGLIA
+    if "taglia" in ml and any(x in ml for x in ["solo","voglio","dammi"]):
+        m=re.search(r'taglia\s*([a-z0-9\.]+)',ml)
+        if m:
+            taglia=m.group(1).upper().strip()
+            is_temp="per un po" in ml or "per ora" in ml
+            if is_temp:
+                up["temp_size"]=taglia; up["until"]=time.time()+7200
+                risposta=f"Perfetto 👕 Per 2 ore solo taglia {taglia}"
+            else:
+                if taglia not in up.get("sizes",[]): up.setdefault("sizes",[]).append(taglia)
+                up["temp_size"]=None
+                risposta=f"Chiaro! 📏 Da ora solo taglia {taglia} — prezzo per stessa taglia"
+            pref[str(user_id)]=up; salva_pref(pref)
+            uh.append({"role":"assistant","content":risposta,"time":str(datetime.datetime.now())})
+            storico[str(user_id)]=uh[-30:]; salva_chat(storico); return risposta
+
+    # SOLO BRAND
+    if any(x in ml for x in ["solo","voglio solo","dammi solo"]):
+        b=detect_brand(messaggio)
+        if b:
+            is_temp="per un po" in ml or "per ora" in ml
+            if is_temp:
+                up["temp_brand"]=b; up["until"]=time.time()+7200
+                risposta=f"Ok 👑 Per 2 ore solo {b.title()}"
+            else:
+                if b not in up.get("brands",[]): up.setdefault("brands",[]).append(b)
+                up["temp_brand"]=None
+                risposta=f"Ricevuto! 🏷️ Da ora solo {b.title()}"
+            pref[str(user_id)]=up; salva_pref(pref)
+            uh.append({"role":"assistant","content":risposta,"time":str(datetime.datetime.now())})
+            storico[str(user_id)]=uh[-30:]; salva_chat(storico); return risposta
+
     if ha_foto:
         nome=messaggio.strip() or "oggetto in foto"
-        if len(nome)<5 or any(k in msg_lower for k in ["usa quella","quella foto","vedi l'immagine","gia mandata","quella"]):
-            for h in reversed(user_history[:-1]):
-                txt=h.get("content","")
-                if len(txt)>5:
-                    nome=txt
-                    brand_det=detect_brand(txt) or brand_det
-                    break
-            if len(nome)<5:
-                nome="oggetto in foto"
-
-        result=genera_descrizione_vendita(nome, brand_det)
+        result=genera_descrizione_vendita(nome,brand_det)
         merc=result.get("mercato")
         if merc:
-            flag_str=f"\n⚠️ {merc['flag'].replace('_',' ')}" if merc.get("flag") else ""
-            validati_str=f"\n❤️ {merc.get('validati',0)} validati (5+ cuori)" if merc.get("validati",0)>0 else ""
-            card_str=""
-            if is_card(nome, brand_det or ""):
-                card_str=f"\n🃏 Carta: variante {detect_card_variant(nome)}"
-            risposta=(
-                f"📸 **{result['titolo_seo']}**\n"
-                f"📊 Valore mercato: {merc['valore']}€ (range: {merc['min']}-{merc['max']}€ su {merc['count']} annunci)"
-                f"{validati_str}{card_str}{flag_str}\n\n"
-                f"⚡ Prezzo veloce: {result['prezzo_veloce']}€ | Max: {result['prezzo_massimo']}€\n\n"
-                f"Vuoi la descrizione? Scrivi `!vendi {nome}`"
-            )
+            risposta=f"📸 {result['titolo_seo']} - {merc['valore']}€ range {merc['min']}-{merc['max']} su {merc['count']} - stessa TAGLIA"
         else:
-            risposta="📸 Foto ricevuta! Non trovo abbastanza annunci validati. Dimmi brand e modello precisi. 🔍"
-
-    # --- STATO BOT ---
-    elif any(x in msg_lower for x in ["non trovo","sta a cerca","stai cercando","cerchi","sniper","offert","stato"]):
-        risposta=(
-            f"✅ Bot attivo 🔥\n"
-            f"🔄 Scansione ogni 2s su {len(cfg['user_brands'])} brand\n"
-            f"⏱️ Solo freschi (max {cfg['max_secondi_freschezza']}s)\n"
-            f"❤️ Confronto con annunci {cfg['min_cuori_validazione']}+ cuori\n"
-            f"🧐 Condizioni: ✨ Top 100% | ✅ Buone 85% | 👌 Medie 68% | ⚠️ Basse 45%\n"
-            f"💰 Sotto prezzo min: {cfg['sotto_prezzo_min']}€\n"
-            f"👀 Visti: {len(gia_visti)}"
-        )
-
-    # --- CONFRONTO ---
-    elif any(x in msg_lower for x in ["secondo te","come e meglio","quale e meglio","consigliami","quale conviene","confronto"]):
-        all_text=" ".join([h.get("content","") for h in user_history[-6:]]) + " " + messaggio
-        oggetti=[]
-        for b in ["lacoste","ralph lauren","dsquared2","stone island","pokemon","charizard","nike dunk","jordan 1"]:
-            if b in all_text.lower() and b not in oggetti:
-                oggetti.append(b)
-        if len(oggetti)<2:
-            oggetti=["lacoste polo","ralph lauren polo","dsquared2 t-shirt","pokemon charizard"]
-        risultati=studia_confronto(oggetti[:4])
-        txt="🧠 **Confronto mercati:**\n\n"
-        for i,r in enumerate(risultati):
-            if r["mercato"]:
-                flag_str=f" ⚠️ {r['mercato']['flag'].replace('_',' ')}" if r["mercato"].get("flag") else ""
-                val_str=f" | ❤️ {r['mercato'].get('validati',0)} validati" if r["mercato"].get("validati",0)>0 else ""
-                txt+=f"**{i+1}. {r['nome'].title()}** → {r['mercato']['valore']}€ ({r['mercato']['count']} annunci){val_str}{flag_str}\n"
-        if risultati:
-            txt+=f"\n👉 Top: {risultati[0]['nome'].title()} a {risultati[0]['mercato']['valore']}€ 🏆"
-        risposta=txt
-
-    # --- CONFIG ---
-    elif any(x in msg_lower for x in ["filtr","guadagno","config","soglie","impostazioni"]):
-        risposta=(
-            f"⚙️ **Config V21 CLEAN:**\n"
-            f"• Sotto prezzo min: {cfg['sotto_prezzo_min']}€\n"
-            f"• Soglie: 💧🔥 {cfg['sotto_prezzo_min']}€ | 💥🔥 {cfg['guadagno_banger']}€ | 🔴🔥 {cfg['guadagno_mostro']}€ | 🟣🔥 {cfg['guadagno_super_mostro']}€\n"
-            f"• Cuori min: {cfg['min_cuori_validazione']}\n"
-            f"• Freschi max: {cfg['max_secondi_freschezza']}s\n"
-            f"• Spedizione: {cfg['spedizione']}€\n"
-            f"• Brand: {', '.join(cfg['user_brands'])}\n"
-            f"• Visti: {len(gia_visti)}"
-        )
-
-    # --- DEFAULT ---
+            risposta="📸 Foto! Dimmi brand + modello + taglia. Valuto stessa taglia"
+    elif any(x in ml for x in ["stato","cosa fai","come funziona","logica","spiega"]):
+        active=[]
+        if up.get("temp_brand") and time.time()<up.get("until",0): active.append(f"Solo {up['temp_brand']} 2h")
+        if up.get("temp_size") and time.time()<up.get("until",0): active.append(f"Solo taglia {up['temp_size']} 2h")
+        if up.get("brands"): active.append(f"Brand {', '.join(up['brands'])}")
+        if up.get("sizes"): active.append(f"Taglie {', '.join(up['sizes'])}")
+        act="\n".join(active) if active else "Nessun filtro - tutti gli affari"
+        risposta=f"✅ Bot 24H 🧠\n🆕 Solo appena usciti max {cfg['max_secondi_freschezza']}s\n💸 Solo affari min {cfg['sotto_prezzo_min']}€\n📏 Prezzo per TAGLIA + COND\n\nTuoi filtri:\n{act}\n👀 Visti {len(gia_visti)}"
     else:
-        if brand_det:
-            m=analizza_mercato_vendita(messaggio)
-            if m:
-                flag_str=f"\n⚠️ {m['flag'].replace('_',' ')}" if m.get("flag") else ""
-                validati_str=f"\n❤️ {m.get('validati',0)} validati" if m.get("validati",0)>0 else ""
-                risposta=(
-                    f"📊 **{messaggio.title()}**\n"
-                    f"💰 Valore: {m['valore']}€ (range: {m['min']}-{m['max']}€ su {m['count']})"
-                    f"{validati_str}{flag_str}\n\n"
-                    f"Scrivi !vendi {messaggio} per descrizione ✍️"
-                )
-            else:
-                risposta=f"Ho riconosciuto {brand_det.title()} 👀 ma non trovo abbastanza annunci validati. Dimmi il modello preciso. 🔍"
-        else:
-            risposta=(
-                "🤖 Bot Vinted V21 🔥 CLEAN + DM\n"
-                "Mandami una foto 📸 + nome per analisi prezzo\n"
-                "Comandi: !vendi, !prezzo, !migliora, !config ✨\n"
-                "Dimmi 'stato' per vedere se snipa ✅"
-            )
+        risposta="🤖 Bot V21.5 🧠\n🆕 Solo appena usciti | 💸 Solo affari | 📏 Prezzo per taglia\nDimmi 'solo M', 'solo Stone Island per un po', 'bravo questo è un vero affare', 'questo non è un affare', 'stato'"
 
-    user_history.append({"role":"assistant","content":risposta,"time":str(datetime.datetime.now())})
-    if len(user_history)>30:
-        user_history=user_history[-30:]
-    storico[str(user_id)]=user_history
-    salva_chat(storico)
+    uh.append({"role":"assistant","content":risposta,"time":str(datetime.datetime.now())})
+    if len(uh)>30: uh=uh[-30:]
+    storico[str(user_id)]=uh; salva_chat(storico)
     return risposta
 
 @bot.event
 async def on_ready():
-    carica_visti(); cfg=carica_config()
-    print(f"🔥 Bot V21 CLEAN + DM online {bot.user} | Cuori {cfg['min_cuori_validazione']}+ | Min {cfg['sotto_prezzo_min']}€ | Visti {len(gia_visti)}")
+    carica_visti()
+    cfg=carica_config()
+    print(f"🔥 Bot V21.5 CLEAN + CERVELLO online {bot.user} | Visti {len(gia_visti)}")
     if not controllo_vinted.is_running(): controllo_vinted.start()
 
 @bot.event
 async def on_message(message):
     if message.author==bot.user: return
-
-    # Salva ultima foto per user
     if len(message.attachments)>0:
         last_photo_per_user[message.author.id]=message.attachments[0].url
-
     if message.content.startswith("!"):
-        await bot.process_commands(message)
-        return
-
-    # DM: chat intelligente con foto
+        await bot.process_commands(message); return
     if isinstance(message.channel, discord.DMChannel):
         ha_foto=len(message.attachments)>0
         if not ha_foto and any(k in message.content.lower() for k in ["quella foto","quella","vedi l'immagine","gia mandata","usa quella"]):
-            if message.author.id in last_photo_per_user:
-                ha_foto=True
+            if message.author.id in last_photo_per_user: ha_foto=True
         async with message.channel.typing():
             risposta=risposta_chat_infinita(message.author.id, message.content, ha_foto)
-        await message.channel.send(risposta)
-        return
-
-    # Mention nel server
+        await message.channel.send(risposta); return
     if bot.user in message.mentions:
-        ha_foto=len(message.attachments)>0
-        risposta=risposta_chat_infinita(message.author.id, message.content, ha_foto)
-        await message.channel.send(f"{message.author.mention} {risposta}")
-        return
-
+        risposta=risposta_chat_infinita(message.author.id, message.content, len(message.attachments)>0)
+        await message.channel.send(f"{message.author.mention} {risposta}"); return
     await bot.process_commands(message)
-
-@bot.command()
-async def filtro(ctx, azione=None, *, args=""):
-    filtri=carica_filtri()
-    if azione=="add":
-        parti=args.rsplit(" ",1)
-        if len(parti)!=2:
-            await ctx.send("❌ Usa: !filtro add lacoste 35 📝")
-            return
-        kw,pr=parti[0].lower(),parti[1]
-        try: pr=float(pr)
-        except: return
-        filtri.append({"keyword":kw,"max":pr})
-        salva_filtri(filtri)
-        await ctx.send(f"✅ Aggiunto {kw} sotto {pr}€ 💰")
-    else:
-        cfg=carica_config()
-        await ctx.send(f"⚙️ Sotto prezzo {cfg['sotto_prezzo_min']}€ | Cuori min {cfg['min_cuori_validazione']} ❤️ | Freschi {cfg['max_secondi_freschezza']}s ⏱️ | Visti {len(gia_visti)} 👀")
 
 @bot.command()
 async def config(ctx):
     cfg=carica_config()
-    await ctx.send(f"⚙️ V21 ✨ | 💧🔥 {cfg['sotto_prezzo_min']}€ | 💥🔥 {cfg['guadagno_banger']}€ | 🔴🔥 {cfg['guadagno_mostro']}€ | 🟣🔥 {cfg['guadagno_super_mostro']}€ | Cuori: {cfg['min_cuori_validazione']}+ ❤️ | Spedizione {cfg['spedizione']}€ 📦 | Freschi {cfg['max_secondi_freschezza']}s ⏱️ | Visti {len(gia_visti)} 👀")
-
+    await ctx.send(f"⚙️ V21.5 🧠 | 💧🔥 {cfg['sotto_prezzo_min']}€ | 💥🔥 {cfg['guadagno_banger']}€ | 🔴🔥 {cfg['guadagno_mostro']}€ | 🟣🔥 {cfg['guadagno_super_mostro']}€ | 👀 {len(gia_visti)}")
 @bot.command()
-async def prezzo(ctx,*,nome=""):
-    if not nome: await ctx.send("💰 !prezzo lacoste polo 👕"); return
-    m=analizza_mercato_vendita(nome)
-    if m:
-        flag_str=f" ⚠️ {m['flag'].replace('_',' ')}" if m.get("flag") else ""
-        val_str=f" | ❤️ {m.get('validati',0)} validati" if m.get("validati",0)>0 else ""
-        await ctx.send(f"💰 {nome} → {m['valore']}€ (range: {m['min']}-{m['max']}€ su {m['count']}){val_str}{flag_str} 📊")
-    else: await ctx.send("❌ Non trovo abbastanza annunci validati 🔍")
+async def resetta(ctx):
+    pref=carica_pref()
+    pref[str(ctx.author.id)]={"brands":[],"sizes":[],"temp_brand":None,"temp_size":None,"until":0,"liked":[],"disliked":[]}
+    salva_pref(pref)
+    await ctx.send("Azzerato ✅ Tutti gli affari")
 
-@bot.command()
-async def vendi(ctx,*,nome=""):
-    if not nome: await ctx.send("✍️ !vendi lacoste polo + foto 📸"); return
-    r=genera_descrizione_vendita(nome)
-    embed=discord.Embed(title=f"📦 {r['titolo_seo'][:50]} ✨",description=f"```{r['descrizione'][:1000]}```",color=0x00ff88)
-    if r["mercato"]:
-        flag_str=f" ⚠️ {r['mercato']['flag'].replace('_',' ')}" if r["mercato"].get("flag") else ""
-        val_str=f"\n❤️ {r['mercato'].get('validati',0)} validati" if r["mercato"].get("validati",0)>0 else ""
-        embed.add_field(name="💰 Mercato 📊",value=f"{r['mercato']['valore']}€ (range: {r['mercato']['min']}-{r['mercato']['max']}€ su {r['mercato']['count']}){val_str}{flag_str}\n⚡ Veloce: {r['prezzo_veloce']}€ | Max: {r['prezzo_massimo']}€")
-    await ctx.send(embed=embed)
-
-@bot.command()
-async def migliora(ctx):
-    if not ctx.message.attachments: await ctx.send("📸 Mandami una foto con !migliora ✨"); return
-    try:
-        foto_url=ctx.message.attachments[0].url; r=requests.get(foto_url,timeout=15)
-        img=Image.open(io.BytesIO(r.content))
-        img=ImageEnhance.Contrast(img).enhance(1.2); img=ImageEnhance.Brightness(img).enhance(1.1); img=ImageEnhance.Sharpness(img).enhance(1.3)
-        buf=io.BytesIO(); img.save(buf,format="JPEG",quality=95); buf.seek(0)
-        await ctx.send(file=discord.File(buf,filename="migliorata.jpg"))
-    except Exception as e: await ctx.send(f"❌ Errore: {e} 😢")
-
-@tasks.loop(seconds=2)
+@tasks.loop(seconds=2.5)
 async def controllo_vinted():
+    global ultimo_affare
     try:
         cfg=carica_config(); sess=get_session()
         headers={"User-Agent":random.choice(USER_AGENTS),"Accept":"application/json","Referer":"https://www.vinted.it/"}
         max_fresco=cfg.get("max_secondi_freschezza",2); sotto_min=cfg.get("sotto_prezzo_min",22)
+        pref=carica_pref()
+        active_brands=set(); active_sizes=set(); now=time.time()
+        for data in pref.values():
+            if data.get("temp_brand") and now < data.get("until",0): active_brands.add(data["temp_brand"].lower())
+            if data.get("temp_size") and now < data.get("until",0): active_sizes.add(data["temp_size"].lower())
+            for b in data.get("brands",[]): active_brands.add(b.lower())
+            for s in data.get("sizes",[]): active_sizes.add(s.lower())
         urls=[]
-        for brand in cfg.get("user_brands",[])+cfg.get("scan_brands",[]):
+        search_brands = list(active_brands) if active_brands else cfg.get("user_brands",[])+cfg.get("scan_brands",[])
+        for brand in search_brands:
             bq=brand.replace(" ","%20")
             urls.append(f"https://www.vinted.it/api/v2/catalog/items?search_text={bq}&order=newest_first&per_page=20")
         urls.append("https://www.vinted.it/api/v2/catalog/items?order=newest_first&per_page=40")
-        urls=list(dict.fromkeys(urls))[:8]
+        urls=list(dict.fromkeys(urls))[:10]
         for url in urls:
             try:
                 r=sess.get(url,headers=headers,timeout=12)
@@ -568,34 +503,25 @@ async def controllo_vinted():
                     maxp=cfg.get("max_price_per_brand",{}); max_allowed=maxp.get(b_det,maxp.get(brand.lower(),80))
                     if prezzo>max_allowed or prezzo<5 or prezzo>350: continue
                     if not is_conosciuto(titolo,brand): continue
-                    filtri=carica_filtri()
-                    if filtri:
-                        if not any(f["keyword"].lower() in tlow and prezzo<=f["max"] for f in filtri): continue
+                    if active_sizes:
+                        sl=size.lower()
+                        if sl and not any(s in sl or sl in s for s in active_sizes):
+                            continue
+                    if active_brands:
+                        if not any(ab in (titolo+" "+brand+" "+b_det).lower() for ab in active_brands):
+                            continue
                     merc=analizza_mostro(titolo,brand,prezzo,cond,brand,size)
                     if not merc or merc["count"]<7: continue
-                    valore=merc["valore_condizione"]; val_grez=merc["valore"]
-                    diff=valore-prezzo; netto=diff-cfg["spedizione"]; sconto=(diff/valore*100) if valore>0 else 0; roi=(diff/prezzo*100) if prezzo>0 else 0
+                    valore=merc["valore_condizione"]
+                    diff=valore-prezzo; netto=diff-cfg["spedizione"]
                     if diff<sotto_min: continue
-                    flag=merc.get("flag"); cp=merc["count"]<10; cm=merc["count"]<7
-                    diff_min=max(sotto_min,prezzo*0.8) if prezzo<50 else max(sotto_min,prezzo*0.45)
-                    troppo=netto>2*prezzo and prezzo>10
-                    insuff=diff<diff_min
-                    nf=0
-                    if cp: nf+=1
-                    if cm: nf+=1
-                    if troppo: nf+=1
-                    if flag and flag not in ("DATI_INSTABILI","CAMPIONE_PICCOLO"): nf+=1
-                    if nf>=2: continue
-                    sb=sotto_min; sban=cfg.get("guadagno_banger",28); smos=cfg.get("guadagno_mostro",32); ssup=cfg.get("guadagno_super_mostro",45)
-                    if flag=="DATI_INSTABILI": sb+=5; sban+=5; smos+=5; ssup+=5
-                    if cp: sb+=3; sban+=3; smos+=3; ssup+=3
-                    if insuff or netto<sb: continue
-                    emoji_cond=merc.get("emoji_cond","❓"); cond_text=merc.get("condizione","sconosciuta"); mult=merc.get("multiplier",1.0)
-                    if netto>=ssup:
+                    if netto< sotto_min: continue
+                    emoji_cond=merc.get("emoji_cond","❓")
+                    if netto>=cfg["guadagno_super_mostro"]:
                         emoji="🟣🔥🔥🔥💸💸💸"; ping="@everyone 🟣🔥 45€+ NETTI! 🚀"; color=0x9b59b6; fuoco="🔥🔥🔥 AFFARONE MOSTRUOSO 🔥🔥🔥"
-                    elif netto>=smos:
+                    elif netto>=cfg["guadagno_mostro"]:
                         emoji="🔴🔥🔥💸💸"; ping="@here 🔴🔥 32€+ NETTI! 💥"; color=0xff0000; fuoco="🔥🔥 MOSTRO 🔥🔥"
-                    elif netto>=sban:
+                    elif netto>=cfg["guadagno_banger"]:
                         emoji="💥🔥💸"; ping=""; color=0x00ff88; fuoco="🔥 BANGER 🔥"
                     else:
                         emoji="💧🔥"; ping=""; color=0xffaa00; fuoco="🔥 BUON AFFARE"
@@ -604,25 +530,20 @@ async def controllo_vinted():
                         sec=int(time.time()-float(item.get("created_at_ts",time.time())))
                         pub=f"{sec}s fa" if sec<60 else f"{sec//60} minuti fa"
                     except: pub="ora"
+                    ultimo_affare={"id":iid,"titolo":titolo,"brand":brand,"brand_detected":b_det,"size":size,"prezzo":prezzo,"valore":valore,"netto":round(netto),"link":link}
                     canale=None
                     for g in bot.guilds:
                         for ch in g.text_channels:
                             if ch.permissions_for(g.me).send_messages: canale=ch; break
                         if canale: break
                     if canale:
-                        flagt=""
-                        if flag: flagt+=f"\n⚠️ {flag.replace('_',' ')}"
-                        if cp: flagt+="\n⚠️ CAMPIONE PICCOLO 🔍"
-                        if troppo: flagt+="\n⚠️ VERIFICARE MANUALMENTE 👀"
-                        if merc.get("is_card"): flagt+="\n🃏 Carta: verifica variante 🎴"
                         titolo_embed=f"{emoji} {titolo[:50].strip()} | {round(netto)}€ NETTI"
-                        desc=(f"{fuoco}\n{titolo}\n\n🏷️ **Brand**\n{brand} ({b_det})\n\n📦 **Size**\n{size or 'Unica / Non specificata'}\n\n✨ **Condition**\n{emoji_cond} {cond} ({cond_text} x{mult})\n\n⏱️ **Published**\n{pub}\n\n⭐ **Reviews**\n❤️ {cuori} cuori item | {merc['count']} validati | {merc['validati_cuori']} con {cfg['min_cuori_validazione']}+ ❤️\n📊 Range: {merc['min']}-{merc['max']}€ su {merc['count_totali']} totali\n\n💰 **Price**\n{prezzo}€ (acquisto) + {cfg['spedizione']}€ sped → Rivendita corretta {valore}€ {emoji_cond} (grezzo {val_grez}€)\n**NETTO: {round(netto)}€** 💸 | Sotto prezzo {round(diff)}€ | Sconto {round(sconto)}% | ROI {round(roi)}%\n{flagt}\n\n[🚀 PRENDI SUBITO]({link})")
+                        desc=(f"{fuoco}\n{titolo}\n\n🏷️ Brand {brand} ({b_det})\n📦 Size {size or 'Unica'}\n✨ Condition {emoji_cond} {cond}\n⏱️ Published {pub}\n⭐ Reviews ❤️ {cuori} | {merc['count']} validati\n💰 Price {prezzo}€ + {cfg['spedizione']}€ → {valore}€\nNETTO {round(netto)}€ 💸\n[🚀 PRENDI SUBITO]({link})")
                         emb=discord.Embed(title=titolo_embed,description=desc,color=color)
                         if foto: emb.set_image(url=foto)
-                        emb.set_footer(text=f"🔥 V21 {emoji_cond} {b_det} | Netto {round(netto)}€ | Cond: {cond_text} | {pub} | ❤️ {cuori}")
                         await canale.send(content=ping,embed=emb)
                 if len(gia_visti)%20==0: salva_visti()
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(random.uniform(0.25,0.7))
             except Exception as e:
                 print(f"scan err {e}")
                 continue
@@ -634,7 +555,7 @@ if __name__=="__main__":
     tok=os.getenv("DISCORD_TOKEN")
     if tok:
         threading.Thread(target=run_flask,daemon=True).start()
-        print("🔥 Avvio V21 CLEAN + DM CHAT")
+        print("🔥 Avvio V21.5 CLEAN + CERVELLO MINIMO - 2.5s safe")
         bot.run(tok)
     else:
         print("❌ DISCORD_TOKEN mancante")
