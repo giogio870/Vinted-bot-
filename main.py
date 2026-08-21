@@ -1,5 +1,5 @@
-# 🔥 BOT V26 - SOLO AFFARI VELOCI + CERVELLO - FINAL FIX 2 BUG
-import discord, asyncio, requests, json, os, re, time, random, threading, datetime
+# 🔥 BOT V27 RESET TOTALE - SOLO APPENA USCITI 2 MIN + 15€ MARGINE
+import discord, asyncio, requests, json, os, re, time, random, threading
 from discord.ext import commands, tasks
 from flask import Flask
 
@@ -8,12 +8,10 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-FILTRI_FILE="filtri.json"; CONFIG_FILE="config.json"; CHAT_FILE="chat_storico.json"; VISTI_FILE="gia_visti.json"
-PREF_FILE="preferenze_utenti.json"; LEARNING_FILE="learning.json"
+VISTI_FILE="gia_visti.json"; PREF_FILE="preferenze_utenti.json"; LEARNING_FILE="learning.json"; CONFIG_FILE="config.json"
 gia_visti=set(); vinted_session=None; last_session_refresh=0; ultimo_affare=None
 USER_AGENTS=["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36","Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1"]
 
-# REGOLE FINALI TUE
 regole = [
   {"brand":"polo ralph lauren","cat":"maglione","models":["cable knit","bear","quarter zip","cricket","knit","pony"],"buy_max":23,"sell_min":35,"sell_max":45},
   {"brand":"polo ralph lauren","cat":"felpa","models":["bear","big pony","crest","rl 67","knit","quarter zip"],"buy_max":23,"sell_min":35,"sell_max":45},
@@ -28,35 +26,22 @@ regole = [
   {"brand":"north face","cat":"giubbotto","models":["nuptse","1996","1990 mountain","denali","gore-tex","mountain jacket","puffer"],"buy_max":50,"sell_min":80,"sell_max":105},
   {"brand":"levi's","cat":"giubbotto","models":["trucker","type 3","sherpa","denim jacket","type iii"],"buy_max":28,"sell_min":45,"sell_max":65},
   {"brand":"nike","cat":"felpa","models":["center swoosh","big swoosh","spellout","90s","vintage","windrunner","track jacket","windbreaker"],"buy_max":22,"sell_min":35,"sell_max":48},
+  {"brand":"stone island","cat":"felpa","models":["patch","crest","ghost","crewneck","hoodie"],"buy_max":40,"sell_min":70,"sell_max":95},
+  {"brand":"stone island","cat":"maglione","models":["knit","crewneck","patch","ghost"],"buy_max":40,"sell_min":70,"sell_max":90},
+  {"brand":"stone island","cat":"giubbotto","models":["jacket","parka","puffer","ghost","membrana","nylon","overshirt"],"buy_max":85,"sell_min":130,"sell_max":170},
 ]
 
-TAGLIE_OK = ["S","M","L","XL","S/M","M/L","L/XL","S - M","M - L"]
+TAGLIE_OK = ["S","M","L","XL","S/M","M/L","L/XL"]
 COND_OK = ["nuovo con etichette","nuovo senza etichette","nuovo","ottime","molto buono","very good","ottimo","eccellente","excellent","buone","buono","good","discrete"]
 BANNED_KEYWORDS = ["shorts","bermuda","vaquero","elite","pantaloncini","jeans corto","sneaker tee","y2k tee","bikini","costume","intimo","boxer","gonna","vestito"]
 BAMBINO_PATTERN = re.compile(r'(\b\d{1,2}\s*anni\b|\b\d{1,2}Y\b|\b\d{3}cm\b|kinder|junior|\b12A\b|\b14A\b|152|164|128|140)', re.I)
 
 app=Flask(__name__)
 @app.route("/")
-def home(): return "Bot V26 AFFARI VELOCI FINAL FIX"
+def home(): return "Bot V27 RESET 2MIN 15€ MARGINE"
 def run_flask(): app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
 
-def carica_config():
-    default={"spedizione":5,"max_secondi_freschezza":60}
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE,"r") as f: cfg=json.load(f); default.update(cfg); return default
-        except: return default
-    return default
-def salva_config(c):
-    with open(CONFIG_FILE,"w") as f: json.dump(c,f,indent=2)
-def carica_chat():
-    if os.path.exists(CHAT_FILE):
-        try:
-            with open(CHAT_FILE,"r") as f: return json.load(f)
-        except: return {}
-    return {}
-def salva_chat(ch):
-    with open(CHAT_FILE,"w") as f: json.dump(ch,f,indent=2)
+def carica_config(): return {"spedizione":5,"max_secondi_freschezza":120,"margine_minimo":15}
 def carica_visti():
     global gia_visti
     if os.path.exists(VISTI_FILE):
@@ -93,47 +78,20 @@ def get_session():
             last_session_refresh=now
         except: pass
     return vinted_session
-def condizione_ok(s): return any(c in s.lower() for c in COND_OK) if s else False
 def taglia_ok(s):
     if not s: return False
     st=s.strip().upper()
-    if st in TAGLIE_OK or st in ["S","M","L","XL"]: return True
-    if st in ["XXL","XS","XXS","XXXL"] or "XXL" in st or "XXXL" in st: return False
-    return any(x in st for x in ["S","M","L","XL"])
-def is_banned(titolo, descrizione): return any(k in f"{titolo} {descrizione}".lower() for k in BANNED_KEYWORDS)
-def is_bambino(size_title, titolo, descrizione): return bool(BAMBINO_PATTERN.search(f"{size_title} {titolo} {descrizione}".lower()))
-def is_tshirt_base(titolo, descrizione, rule):
-    if rule["cat"]=="t-shirt":
-        testo=f"{titolo} {descrizione}".lower()
-        return not ("bear" in testo or "big pony" in testo)
+    return st in TAGLIE_OK or st in ["S","M","L","XL"]
+def is_banned(t): return any(k in t.lower() for k in BANNED_KEYWORDS)
+def is_bambino(s,t,d): return bool(BAMBINO_PATTERN.search(f"{s} {t} {d}".lower()))
+def is_tshirt_base(t,d,r):
+    if r["cat"]=="t-shirt": return not ("bear" in f"{t} {d}".lower() or "big pony" in f"{t} {d}".lower())
     return False
-def matches_curated(titolo, brand_title, descrizione, prezzo, size_title, status, fav_count, created_ts):
-    tlow=(titolo+" "+brand_title).lower()
-    dlow=(descrizione or "").lower()
-    testo_completo=tlow+" "+dlow
-    if is_banned(titolo, descrizione): return None
-    if is_bambino(size_title, titolo, descrizione): return None
-    if not taglia_ok(size_title) or not condizione_ok(status): return None
-    try:
-        if not created_ts or (time.time()-float(created_ts))>60: return None
-    except: return None
-    if fav_count and int(fav_count)>0: return None
-    for rule in regole:
-        b=rule["brand"]
-        if b not in tlow and b.split()[0] not in tlow:
-            if not (b=="polo ralph lauren" and "ralph lauren" in tlow):
-                if not (b=="north face" and "north face" in tlow):
-                    if not (b=="levi's" and "levi" in tlow): continue
-        if rule["cat"]=="t-shirt" and is_tshirt_base(titolo, descrizione, rule): continue
-        if not any(m in testo_completo for m in rule["models"]): continue
-        if prezzo>rule["buy_max"]: continue
-        return dict(rule)
-    return None
 
 @bot.event
 async def on_ready():
     carica_visti()
-    print(f"Bot V26 FINAL FIX online {bot.user} | Regole {len(regole)} | 60s 0like")
+    print(f"Bot V27 RESET online {bot.user} | {len(regole)} regole | 120s | margine 15€")
     if not controllo_vinted.is_running(): controllo_vinted.start()
 
 @bot.event
@@ -141,41 +99,30 @@ async def on_message(message):
     global ultimo_affare
     if message.author==bot.user: return
     if message.content.startswith("!"):
-        await bot.process_commands(message)
-        return
-    contenuto=message.content.lower()
-    uid=str(message.author.id)
-    pref=carica_pref(); learning=carica_learning()
-    if any(x in contenuto for x in ["non è un affare","non e un affare","bidonata","non vale","fa schifo"]):
+        await bot.process_commands(message); return
+    if "non è un affare" in message.content.lower() or "bidonata" in message.content.lower():
         if ultimo_affare:
-            titolo=ultimo_affare.get("titolo","").lower()
-            if uid not in pref: pref[uid]={"blacklist_titoli":[],"disliked":[],"brands":[],"sizes":[]}
-            if titolo and titolo not in pref[uid]["blacklist_titoli"]:
-                pref[uid]["blacklist_titoli"].append(titolo[:80])
+            pref=carica_pref(); uid=str(message.author.id)
+            if uid not in pref: pref[uid]={"blacklist_titoli":[]}
+            pref[uid]["blacklist_titoli"].append(ultimo_affare.get("titolo","").lower()[:80])
             salva_pref(pref)
-            learning.append({"titolo":ultimo_affare.get("titolo"),"motivo":"non è un affare","time":time.time()})
-            salva_learning(learning)
-            await message.channel.send(f"🧠 Blacklist: `{ultimo_affare.get('titolo')[:50]}`")
+            await message.channel.send(f"🧠 Blacklistato: {ultimo_affare.get('titolo')[:50]}")
             return
 
-@bot.command()
-async def config(ctx):
-    cfg=carica_config()
-    await ctx.send(f"V26 FINAL FIX | Regole {len(regole)} | {cfg.get('max_secondi_freschezza')}s max | 0 like | Visti {len(gia_visti)}")
 @bot.command()
 async def reset(ctx):
     pref=carica_pref(); uid=str(ctx.author.id)
     if uid in pref: del pref[uid]; salva_pref(pref)
-    await ctx.send("✅ Filtri resettati.")
+    await ctx.send("✅ Reset fatto.")
 
 @tasks.loop(seconds=2.5)
 async def controllo_vinted():
     global ultimo_affare
     try:
-        cfg=carica_config(); sess=get_session()
+        sess=get_session()
         headers={"User-Agent":USER_AGENTS[0],"Accept":"application/json","Referer":"https://www.vinted.it/"}
-        max_fresco=cfg.get("max_secondi_freschezza",60)
-        for url in [f"https://www.vinted.it/api/v2/catalog/items?search_text={b.replace(' ','%20')}&order=newest_first&per_page=20" for b in list(set([r['brand'] for r in regole]))][:12]:
+        pref=carica_pref()
+        for url in [f"https://www.vinted.it/api/v2/catalog/items?search_text={b.replace(' ','%20')}&order=newest_first&per_page=25" for b in list(set([r['brand'] for r in regole]))][:14]:
             try:
                 r=sess.get(url,headers=headers,timeout=10)
                 if r.status_code==429: await asyncio.sleep(5); continue
@@ -184,54 +131,59 @@ async def controllo_vinted():
                     iid=str(item.get("id"))
                     if iid in gia_visti: continue
                     gia_visti.add(iid)
-                    cts=item.get("created_at_ts"); fav=item.get("favourite_count",0) or 0
+                    cts=item.get("created_at_ts")
                     try:
-                        if not cts or (time.time()-float(cts))>max_fresco: continue
+                        if not cts or (time.time()-float(cts))>120: continue
                     except: continue
-                    if fav>0: continue
-                    titolo=item.get("title",""); brand=item.get("brand_title",""); cond=item.get("status",""); size=item.get("size_title","")
+                    titolo=item.get("title",""); brand=item.get("brand_title",""); size=item.get("size_title",""); cond=item.get("status","")
                     try: prezzo=float(item.get("price",{}).get("amount"))
                     except: continue
-                    if prezzo<2 or prezzo>110: continue
-                    descrizione=item.get("description","")
-                    rule=matches_curated(titolo,brand,descrizione,prezzo,size,cond,fav,cts)
-                    if not rule:
-                        if not descrizione:
-                            try:
-                                det=sess.get(f"https://www.vinted.it/api/v2/items/{iid}",headers=headers,timeout=7)
-                                if det.status_code==200:
-                                    descrizione=det.json().get("item",{}).get("description","")
-                                    await asyncio.sleep(0.3)
-                                    rule=matches_curated(titolo,brand,descrizione,prezzo,size,cond,fav,cts)
-                            except: pass
-                        if not rule: continue
+                    if not taglia_ok(size): continue
+                    descrizione=item.get("description","") or ""
+                    if is_banned(f"{titolo} {descrizione}") or is_bambino(size,titolo,descrizione): continue
+                    tlow=(titolo+" "+brand).lower()
+                    if any(bt in tlow for data in pref.values() for bt in data.get("blacklist_titoli",[])): continue
+                    # match regola
+                    rule=None
+                    testo=(titolo+" "+brand+" "+descrizione).lower()
+                    for rg in regole:
+                        if rg["brand"] not in tlow and rg["brand"].split()[0] not in tlow:
+                            if not ("ralph lauren" in tlow and "polo ralph" in rg["brand"]):
+                                if not ("levi" in tlow and "levi's" in rg["brand"]):
+                                    if not ("stone island" in tlow and "stone island" in rg["brand"]): continue
+                        if rg["cat"]=="t-shirt" and is_tshirt_base(titolo,descrizione,rg): continue
+                        if not any(m in testo for m in rg["models"]): continue
+                        if prezzo>rg["buy_max"]: continue
+                        rule=rg; break
+                    if not rule: continue
+                    # MARGINE 15€
+                    netto = rule["sell_min"] - prezzo - 5
+                    if netto < 15: continue
                     link=f"https://www.vinted.it/items/{iid}"; foto=item.get("photo",{}).get("url","")
                     sec=int(time.time()-float(cts)) if cts else 0
                     ultimo_affare = {"titolo": titolo, "id": iid, "prezzo": prezzo}
-                    emoji="🟣🔥" if rule["sell_max"]>=75 else "🔴🔥" if rule["sell_max"]>=50 else "💥🔥"
-                    titolo_embed=f"{emoji} {rule['brand'].upper()} {rule['cat'].upper()} | {titolo[:45]} | {prezzo}€ -> {rule['sell_min']}-{rule['sell_max']}€"
-                    desc=(f"⚡ **AFFARE VELOCE 0-60s 0 LIKE - FINAL FIX** ⚡\n{titolo}\n\nBrand: {brand}\nModello: {rule['cat']}\nTaglia: {size} ✅\nCond: {cond}\n⏱️ {sec}s fa | ❤️ {fav}\n💰 BUY max {rule['buy_max']}€ | {prezzo}€\n💸 SELL {rule['sell_min']}-{rule['sell_max']}€\n[🚀 PRENDI SUBITO]({link})")
+                    emoji="🟣🔥" if rule["sell_max"]>=80 else "🔴🔥" if rule["sell_max"]>=50 else "💥🔥"
+                    titolo_embed=f"{emoji} {rule['brand'].upper()} {rule['cat'].upper()} | {titolo[:40]} | {prezzo}€ -> {rule['sell_min']}-{rule['sell_max']}€ ({round(netto)}€ NETTI)"
+                    desc=(f"⚡ **APPENA USCITO {sec}s FA - MARGINE {round(netto)}€** ⚡\n{titolo}\n\nBrand: {brand}\nTaglia: {size} ✅\nCond: {cond}\n⏱️ {sec}s fa\n💰 BUY {prezzo}€ (max {rule['buy_max']}€)\n💸 SELL REALE {rule['sell_min']}-{rule['sell_max']}€\nNETTO +{round(netto)}€ MINIMO\n[🚀 PRENDI SUBITO]({link})")
                     canale=None
                     for g in bot.guilds:
                         for ch in g.text_channels:
                             if ch.permissions_for(g.me).send_messages: canale=ch; break
                         if canale: break
                     if canale:
-                        emb=discord.Embed(title=titolo_embed,description=desc,color=0x9b59b6 if rule["sell_max"]>=70 else 0xff0000)
+                        emb=discord.Embed(title=titolo_embed,description=desc,color=0x9b59b6 if netto>=25 else 0xff0000)
                         if foto: emb.set_image(url=foto)
-                        ping="@here ⚡" if rule["sell_min"]>=35 else ""
-                        await canale.send(content=ping,embed=emb)
-                if len(gia_visti)%30==0: salva_visti()
-                await asyncio.sleep(0.4)
+                        await canale.send(content=f"@here ⚡ {sec}s fa | +{round(netto)}€ NETTI" if netto>=18 else "",embed=emb)
+                await asyncio.sleep(0.35)
             except Exception as e:
                 print(f"scan err {e}"); continue
         salva_visti()
     except Exception as e:
-        print(f"Errore scan: {e}")
+        print(f"Errore scan {e}")
 
 if __name__=="__main__":
     tok=os.getenv("DISCORD_TOKEN")
     if tok:
         threading.Thread(target=run_flask,daemon=True).start()
-        print("🔥 Avvio V26 FINAL FIX - 2 bug corretti")
+        print("🔥 Avvio V27 RESET TOTALE - 120s 15€ margine")
         bot.run(tok)
