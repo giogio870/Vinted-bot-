@@ -1,4 +1,4 @@
-# 🔥 BOT V29 FINALE PERFETTO - 120s + 15€ MARGINE - NO ZAINI - FIX TOTALE
+# 🔥 BOT V29.1 FINALE PERFETTO - FIX TAGLIA + POLO GIUBBOTTO + LEVI 26 - NO ZAINI
 import discord, asyncio, requests, json, os, re, time, threading
 from discord.ext import commands, tasks
 from flask import Flask
@@ -12,11 +12,10 @@ VISTI_FILE="gia_visti.json"; PREF_FILE="preferenze_utenti.json"
 gia_visti=set(); vinted_session=None; last_session_refresh=0; ultimo_affare=None
 USER_AGENTS=["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36","Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1"]
 
-# 16 REGOLE FINALI PERFETTE - NO ZAINI
 regole = [
   {"brand":"polo ralph lauren","cat":"maglione","models":["cable knit","bear","quarter zip","cricket","knit","pony"],"buy_max":23,"sell_min":35,"sell_max":45},
   {"brand":"polo ralph lauren","cat":"felpa","models":["bear","big pony","crest","rl 67","knit","quarter zip"],"buy_max":23,"sell_min":35,"sell_max":45},
-  {"brand":"polo ralph lauren","cat":"giubbotto","models":["harrington","windbreaker","overshirt","puffer","corduroy"],"buy_max":40,"sell_min":65,"sell_max":85},
+  {"brand":"polo ralph lauren","cat":"giubbotto","models":["harrington","windbreaker","overshirt","puffer","corduroy","polo","ralph","jacket","giubbotto"],"buy_max":40,"sell_min":65,"sell_max":85},
   {"brand":"polo ralph lauren","cat":"t-shirt","models":["bear","big pony"],"buy_max":12,"sell_min":22,"sell_max":32},
   {"brand":"tommy hilfiger","cat":"maglione","models":["flag","crest","tommy jeans","spellout"],"buy_max":18,"sell_min":28,"sell_max":38},
   {"brand":"tommy hilfiger","cat":"felpa","models":["flag","crest","tommy jeans","spellout","big flag"],"buy_max":18,"sell_min":28,"sell_max":38},
@@ -32,13 +31,13 @@ regole = [
   {"brand":"stone island","cat":"giubbotto","models":["jacket","parka","puffer","ghost","membrana","nylon","overshirt"],"buy_max":85,"sell_min":130,"sell_max":170},
 ]
 
-TAGLIE_OK = ["S","M","L","XL","S/M","M/L","L/XL"]
+TAGLIE_OK = ["S","M","L","XL","S/M","M/L","L/XL","S - M","M - L"]
 BANNED_KEYWORDS = ["shorts","bermuda","vaquero","elite","pantaloncini","jeans corto","sneaker tee","y2k tee","bikini","costume","intimo","boxer","gonna","vestito"]
 BAMBINO_PATTERN = re.compile(r'(\b\d{1,2}\s*anni\b|\b\d{1,2}Y\b|\b\d{3}cm\b|kinder|junior|\b12A\b|\b14A\b|152|164|128|140)', re.I)
 
 app=Flask(__name__)
 @app.route("/")
-def home(): return "Bot V29 FINALE PERFETTO NO ZAINI - LEVI 26"
+def home(): return "Bot V29.1 FIX TAGLIA + GIUBBOTTO ROSSO - LEVI 26"
 def run_flask(): app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
 
 def carica_visti():
@@ -72,7 +71,16 @@ def get_session():
 
 def taglia_ok(s):
     if not s: return False
-    return s.strip().upper() in TAGLIE_OK or s.strip().upper() in ["S","M","L","XL"]
+    su = f" {s.upper()} "
+    # prende anche "M / IT 50", "L - Uomo", "L - Uomo / IT 52"
+    for t in TAGLIE_OK:
+        if f" {t} " in su or su.strip() == t:
+            return True
+    # fallback: se c'è S M L XL isolata dentro
+    for t in ["S","M","L","XL"]:
+        if f" {t} " in su or f" {t}/" in su or f"/{t} " in su or f" {t}-" in su or f"-{t} " in su:
+            return True
+    return False
 
 def is_banned(t): return any(k in t.lower() for k in BANNED_KEYWORDS)
 def is_bambino(s,t,d): return bool(BAMBINO_PATTERN.search(f"{s} {t} {d}".lower()))
@@ -83,7 +91,7 @@ def is_tshirt_base(t,d,r):
 @bot.event
 async def on_ready():
     carica_visti()
-    print(f"Bot V29 FINALE PERFETTO online {bot.user} | {len(regole)} regole | LEVI 26 | NO ZAINI")
+    print(f"Bot V29.1 FIX FINALE online {bot.user} | {len(regole)} regole | LEVI 26 + fix taglia")
     if not controllo_vinted.is_running(): controllo_vinted.start()
 
 @bot.event
@@ -163,5 +171,5 @@ if __name__=="__main__":
     tok=os.getenv("DISCORD_TOKEN")
     if tok:
         threading.Thread(target=run_flask,daemon=True).start()
-        print("🔥 Avvio V29 FINALE PERFETTO - LEVI 26 NO ZAINI")
+        print("🔥 Avvio V29.1 FIX - taglia + giubbotto rosso + Levi 26")
         bot.run(tok)
