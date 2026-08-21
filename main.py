@@ -1,4 +1,4 @@
-# 🔥 BOT V30.1 FIXATO - 4 CAT OTTIMIZZATE + JEANS SOLO DOVE MARGINE + FIX TOTALI
+# 🔥 BOT V31.1 - PRIORITA GIUBBOTTO + BLACKLIST + FIX VISTI + FILTRO DANNEGGIATI
 import discord, asyncio, requests, json, os, re, time, threading, urllib.parse
 from discord.ext import commands, tasks
 from flask import Flask
@@ -12,33 +12,30 @@ VISTI_FILE="gia_visti.json"; PREF_FILE="preferenze_utenti.json"
 gia_visti=set(); vinted_session=None; last_session_refresh=0; ultimo_affare=None
 USER_AGENTS=["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36","Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1"]
 
-# V30.1 - 7 brand, felpa/maglione/giubbotto per tutti, jeans SOLO per 3 con margine reale
+# V31.1 - GIUBBOTTI PRIMA, poi felpe senza ghost/denali, poi maglione, poi jeans solo 3 brand
 regole = [
-  # POLO - NO JEANS (stanno fermi 2 mesi)
-  {"brand":"polo ralph lauren","cat":"maglione","models":["cable knit","bear","quarter zip","cricket","knit","pony","maglione"],"buy_max":23,"sell_min":35,"sell_max":45},
+  # GIUBBOTTI PRIMA - PRIORITA ASSOLUTA
+  {"brand":"polo ralph lauren","cat":"giubbotto","models":["harrington","windbreaker","overshirt","puffer","corduroy","polo","ralph","jacket","giubbotto","giacca","parka","piumino","cappotto"],"buy_max":40,"sell_min":65,"sell_max":85},
+  {"brand":"tommy hilfiger","cat":"giubbotto","models":["sailing","coach","puffer","flag","harrington","giubbotto","giacca","jacket","parka","piumino"],"buy_max":35,"sell_min":55,"sell_max":75},
+  {"brand":"carhartt","cat":"giubbotto","models":["detroit","michigan","og active jacket","detroit jacket","michigan coat","active jacket","giubbotto","giacca","parka"],"buy_max":40,"sell_min":75,"sell_max":95},
+  {"brand":"north face","cat":"giubbotto","models":["nuptse","1996","1990 mountain","denali","gore-tex","mountain jacket","puffer","giubbotto","giacca","parka"],"buy_max":50,"sell_min":80,"sell_max":105},
+  {"brand":"levi's","cat":"giubbotto","models":["trucker","type 3","sherpa","denim jacket","type iii","giubbotto","giacca","jacket"],"buy_max":26,"sell_min":45,"sell_max":65},
+  {"brand":"stone island","cat":"giubbotto","models":["jacket","parka","puffer","ghost","membrana","nylon","overshirt","giubbotto","giacca","piumino","cappotto"],"buy_max":85,"sell_min":130,"sell_max":170},
+  # FELPE DOPO - SENZA ghost, denali, 1990 mountain (quelli sono giubbotti)
   {"brand":"polo ralph lauren","cat":"felpa","models":["bear","big pony","crest","rl 67","knit","quarter zip","felpa"],"buy_max":23,"sell_min":35,"sell_max":45},
-  {"brand":"polo ralph lauren","cat":"giubbotto","models":["harrington","windbreaker","overshirt","puffer","corduroy","polo","ralph","jacket","giubbotto","giacca"],"buy_max":40,"sell_min":65,"sell_max":85},
-  # TOMMY - NO JEANS
-  {"brand":"tommy hilfiger","cat":"maglione","models":["flag","crest","tommy jeans","spellout","maglione"],"buy_max":18,"sell_min":28,"sell_max":38},
   {"brand":"tommy hilfiger","cat":"felpa","models":["flag","crest","tommy jeans","spellout","big flag","felpa"],"buy_max":18,"sell_min":28,"sell_max":38},
-  {"brand":"tommy hilfiger","cat":"giubbotto","models":["sailing","coach","puffer","flag","harrington","giubbotto","giacca"],"buy_max":35,"sell_min":55,"sell_max":75},
-  # CARHARTT - CON JEANS (dove fai soldi)
   {"brand":"carhartt","cat":"felpa","models":["chase","og active","american script","script","active hoodie","felpa"],"buy_max":28,"sell_min":45,"sell_max":60},
-  {"brand":"carhartt","cat":"giubbotto","models":["detroit","michigan","og active jacket","detroit jacket","michigan coat","active jacket","giubbotto"],"buy_max":40,"sell_min":75,"sell_max":95},
+  {"brand":"north face","cat":"felpa","models":["fleece","retro","1995","felpa"],"buy_max":28,"sell_min":50,"sell_max":70},
+  {"brand":"nike","cat":"felpa","models":["center swoosh","90s","vintage","track jacket","windrunner"],"buy_max":15,"sell_min":35,"sell_max":48},
+  {"brand":"stone island","cat":"felpa","models":["patch","crest","crewneck","hoodie","felpa"],"buy_max":40,"sell_min":70,"sell_max":95},
+  # MAGLIONI
+  {"brand":"polo ralph lauren","cat":"maglione","models":["cable knit","bear","quarter zip","cricket","knit","pony","maglione"],"buy_max":23,"sell_min":35,"sell_max":45},
+  {"brand":"tommy hilfiger","cat":"maglione","models":["flag","crest","tommy jeans","spellout","maglione"],"buy_max":18,"sell_min":28,"sell_max":38},
+  {"brand":"stone island","cat":"maglione","models":["knit","crewneck","patch","maglione"],"buy_max":40,"sell_min":70,"sell_max":90},
+  # JEANS SOLO DOVE FAI SOLDI VERI - Polo/Tommy/Nike/North tolti
   {"brand":"carhartt","cat":"jeans","models":["double knee","single knee","work pant","double front","pant","jeans","cargo"],"buy_max":35,"sell_min":65,"sell_max":85},
-  # NORTH FACE - NO JEANS
-  {"brand":"north face","cat":"felpa","models":["denali","fleece","retro","1995","1990 mountain","felpa"],"buy_max":28,"sell_min":50,"sell_max":70},
-  {"brand":"north face","cat":"giubbotto","models":["nuptse","1996","1990 mountain","denali","gore-tex","mountain jacket","puffer","giubbotto"],"buy_max":50,"sell_min":80,"sell_max":105},
-  # LEVI'S - CON JEANS (501/505/511/512 chino)
-  {"brand":"levi's","cat":"giubbotto","models":["trucker","type 3","sherpa","denim jacket","type iii","giubbotto"],"buy_max":26,"sell_min":45,"sell_max":65},
-  {"brand":"levi's","cat":"jeans","models":["501","505","511","512","chino","jeans","pantaloni lunghi","501 jeans","505 jeans"],"buy_max":22,"sell_min":45,"sell_max":65},
-  # NIKE - NO JEANS
-  {"brand":"nike","cat":"felpa","models":["center swoosh","big swoosh","spellout","90s","vintage","windrunner","track jacket","windbreaker","felpa"],"buy_max":22,"sell_min":35,"sell_max":48},
-  # STONE ISLAND - CON JEANS (cargo/jeans)
-  {"brand":"stone island","cat":"felpa","models":["patch","crest","ghost","crewneck","hoodie","felpa"],"buy_max":40,"sell_min":70,"sell_max":95},
-  {"brand":"stone island","cat":"maglione","models":["knit","crewneck","patch","ghost","maglione"],"buy_max":40,"sell_min":70,"sell_max":90},
-  {"brand":"stone island","cat":"giubbotto","models":["jacket","parka","puffer","ghost","membrana","nylon","overshirt","giubbotto"],"buy_max":85,"sell_min":130,"sell_max":170},
-  {"brand":"stone island","cat":"jeans","models":["cargo","jeans","denim","pantaloni lunghi","cargo pants","jeans lunghi"],"buy_max":35,"sell_min":65,"sell_max":85},
+  {"brand":"levi's","cat":"jeans","models":["501","505","511","512","chino","jeans","pantaloni lunghi"],"buy_max":22,"sell_min":45,"sell_max":65},
+  {"brand":"stone island","cat":"jeans","models":["cargo","jeans","denim","pantaloni lunghi","cargo pants"],"buy_max":35,"sell_min":65,"sell_max":85},
 ]
 
 BRAND_ALIASES = {
@@ -46,19 +43,24 @@ BRAND_ALIASES = {
   "tommy hilfiger": ["tommy hilfiger","tommy hillfiger","tommi hilfiger"],
   "carhartt": ["carhartt","carharrt","carrhartt","carhart"],
   "north face": ["north face","nort face","northface","the north face","tnf"],
-  "levi's": ["levi's","levis","levi s","levi s jeans","levis 501"],
+  "levi's": ["levi's","levis","levi s","levis 501"],
   "nike": ["nike","nikke"],
   "stone island": ["stone island","stoneisland","ston island","stone islan"],
 }
 
 TAGLIE_OK = ["S","M","L","XL","S/M","M/L","L/XL","S - M","M - L","50","52","32","34","M / IT 50","L - Uomo","L - Uomo / IT 52"]
-BANNED = ["shorts","bermuda","pantaloncini","t-shirt","magliettina","costume","intimo","bikini","canotta","top","gonna","vestito","polo come maglietta"]
 BAMBINO_PATTERN = re.compile(r'(\b\d{1,2}\s*anni\b|\b\d{1,2}Y\b|\b\d{3}cm\b|kinder|junior|\b12A\b|\b14A\b|152|164|128|140)', re.I)
 COLORI_TOP = ["bianco","nero","grigio","blu navy","navy","black","white","grey","gray"]
+GIUBBOTTO_KEYWORDS = ["giubbotto","giacca","jacket","parka","puffer","piumino","cappotto"]
+
+# FIX 1 NUOVO: filtro capi danneggiati (mancava dalla V10, mai riaggiunto in V30/V31)
+DANNEGGIATO = ["rotto","rotta","buco","bucato","macchia","macchiato","strappato","strappata",
+               "difettato","difettoso","danneggiato","rovinato","sfilacciato","scucito",
+               "cerniera rotta","zip rotta","logoro","consumato","ingiallito"]
 
 app=Flask(__name__)
 @app.route("/")
-def home(): return "Bot V30.1 FIXATO - 4 cat ottimizzate jeans solo Levi/Carhartt/Stone"
+def home(): return "Bot V31.1 - PRIORITA GIUBBOTTO + BLACKLIST + FIX VISTI + FILTRO DANNEGGIATI"
 def run_flask(): app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
 
 def carica_visti():
@@ -102,6 +104,7 @@ def taglia_ok(s):
     return False
 
 def is_bambino(s,t,d): return bool(BAMBINO_PATTERN.search(f"{s} {t} {d}".lower()))
+def is_danneggiato(tl): return any(x in tl for x in DANNEGGIATO)  # FIX 1 NUOVO
 def match_brand(testo):
     tl=testo.lower().replace("ppp","pp")
     trovati=[]
@@ -113,11 +116,14 @@ def match_brand(testo):
     return trovati
 def colore_score(titolo):
     return sum(1 for c in COLORI_TOP if c in titolo.lower())
+def is_giubbotto_prioritario(titolo):
+    tl=titolo.lower()
+    return any(k in tl for k in GIUBBOTTO_KEYWORDS)
 
 @bot.event
 async def on_ready():
     carica_visti()
-    print(f"Bot V30.1 online {bot.user} | {len(regole)} regole | 4 cat ottimizzate")
+    print(f"Bot V31.1 online {bot.user} | {len(regole)} regole | PRIORITA GIUBBOTTO + FILTRO DANNEGGIATI")
     if not controllo_vinted.is_running(): controllo_vinted.start()
 
 @bot.event
@@ -139,6 +145,13 @@ async def controllo_vinted():
     try:
         sess=get_session()
         headers={"User-Agent":USER_AGENTS[0],"Accept":"application/json","Referer":"https://www.vinted.it/"}
+        # BLACKLIST GLOBALE all'inizio
+        pref=carica_pref()
+        blacklist_globale=[]
+        for data in pref.values():
+            blacklist_globale.extend([b.lower() for b in data.get("blacklist_titoli",[]) if b and len(b)>=4])
+        blacklist_globale=list(set(blacklist_globale))
+
         search_terms = ["polo ralph lauren","tommy hilfiger","carhartt","north face","levi","nike","stone island"]
         for term in search_terms:
             q=urllib.parse.quote(term)
@@ -149,34 +162,49 @@ async def controllo_vinted():
                 for item in r.json().get("items",[]):
                     iid=str(item.get("id"))
                     if iid in gia_visti: continue
+                    gia_visti.add(iid) # fix visti: subito dopo check, prima del try timestamp
                     cts = item.get("created_at_ts") or item.get("created_at") or item.get("photo",{}).get("created_at_ts")
                     try:
                         cts = float(cts)
                         if cts > 1e10: cts = cts/1000
                         if time.time() - cts > 150:
-                            gia_visti.add(iid)
                             continue
                     except:
                         continue
-                    gia_visti.add(iid)
                     titolo=item.get("title",""); brand=item.get("brand_title",""); size=item.get("size_title","")
+                    descrizione=item.get("description","") or ""
+                    tl=(titolo+" "+descrizione).lower()
+                    # BLACKLIST CHECK
+                    if blacklist_globale and any(b in titolo.lower() for b in blacklist_globale):
+                        continue
+                    # FIX 1 NUOVO: scarta capi danneggiati
+                    if is_danneggiato(tl):
+                        continue
                     try: prezzo=float(item.get("price",{}).get("amount"))
                     except: continue
-                    descrizione=item.get("description","") or ""
                     if not taglia_ok(size): continue
                     if is_bambino(size,titolo,descrizione): continue
-                    tl=(titolo+" "+descrizione).lower()
                     if any(x in tl for x in ["shorts","bermuda","pantaloncini","t-shirt","magliettina","costume","intimo","bikini","canotta"]):
-                        if not any(k in tl for k in ["felpa","maglione","giubbotto","giacca","jeans","cargo","chino","501","505","double knee","single knee","work pant"]):
+                        if not any(k in tl for k in ["felpa","maglione","giubbotto","giacca","jacket","parka","puffer","jeans","cargo","chino","501","505","double knee","single knee","work pant"]):
                             continue
                     brands_trovati = match_brand(titolo+" "+brand+" "+descrizione)
                     if not brands_trovati: continue
+                    # PRIORITA GIUBBOTTO
+                    priorita_giubbotto = is_giubbotto_prioritario(titolo)
                     rule=None
-                    for rg in regole:
+                    regole_ordinate = sorted(regole, key=lambda r: (0 if r["cat"]=="giubbotto" else 1)) if priorita_giubbotto else regole
+                    for rg in regole_ordinate:
                         if rg["brand"] not in brands_trovati: continue
+                        if priorita_giubbotto and rg["cat"]!="giubbotto": continue
                         if not any(m in (titolo+" "+brand+" "+descrizione).lower() for m in rg["models"]): continue
                         if prezzo>rg["buy_max"]: continue
                         rule=rg; break
+                    if not rule and priorita_giubbotto:
+                        for rg in regole:
+                            if rg["brand"] not in brands_trovati: continue
+                            if not any(m in (titolo+" "+brand+" "+descrizione).lower() for m in rg["models"]): continue
+                            if prezzo>rg["buy_max"]: continue
+                            rule=rg; break
                     if not rule: continue
                     netto = rule["sell_min"] - prezzo - 5
                     if netto < 15: continue
@@ -184,17 +212,18 @@ async def controllo_vinted():
                     sec=int(time.time()-float(cts)) if cts else 0
                     ultimo_affare = {"titolo": titolo, "id": iid, "prezzo": prezzo}
                     col_score=colore_score(titolo)
-                    titolo_embed=f"{'⚪⚫' if col_score>0 else '🔥'} {rule['brand'].upper()} {rule['cat'].upper()} | {titolo[:40]} | {prezzo}€ -> {rule['sell_min']}-{rule['sell_max']}€ (+{round(netto)}€)"
-                    desc=(f"⚡ **{sec}s FA - +{round(netto)}€ {'🎯 COLORE TOP' if col_score>0 else ''}** ⚡\n{titolo}\n\nBrand: {brand} ({brands_trovati[0]})\nCat: {rule['cat']} ✅\nTaglia: {size}\n⏱️ {sec}s\n💰 BUY {prezzo}€ (max {rule['buy_max']}€)\n💸 SELL {rule['sell_min']}-{rule['sell_max']}€\n[🚀 PRENDI]({link})")
+                    # NB: repliche - il bot non le riconosce dal testo, controllare sempre le foto a occhio prima di comprare
+                    titolo_embed=f"{'🧥' if rule['cat']=='giubbotto' else '⚪⚫' if col_score>0 else '🔥'} {rule['brand'].upper()} {rule['cat'].upper()} | {titolo[:40]} | {prezzo}€ -> {rule['sell_min']}-{rule['sell_max']}€ (+{round(netto)}€)"
+                    desc=(f"⚡ **{sec}s FA - +{round(netto)}€ {'🎯 COLORE TOP' if col_score>0 else ''}** ⚡\n{titolo}\n\nBrand: {brand} ({brands_trovati[0]})\nCat: {rule['cat']} ✅ {'PRIORITA GIUBBOTTO' if priorita_giubbotto else ''}\nTaglia: {size}\n⏱️ {sec}s\n💰 BUY {prezzo}€ (max {rule['buy_max']}€)\n💸 SELL {rule['sell_min']}-{rule['sell_max']}€\n⚠️ Controlla le foto reali prima di comprare (rischio repliche)\n[🚀 PRENDI]({link})")
                     canale=None
                     for g in bot.guilds:
                         for ch in g.text_channels:
                             if ch.permissions_for(g.me).send_messages: canale=ch; break
                         if canale: break
                     if canale:
-                        emb=discord.Embed(title=titolo_embed,description=desc,color=0x9b59b6 if netto>=25 else 0xff0000)
+                        emb=discord.Embed(title=titolo_embed,description=desc,color=0x9b59b6 if rule['cat']=='giubbotto' else (0xff0000 if netto>=25 else 0x00ff88))
                         if foto: emb.set_image(url=foto)
-                        ping=f"@here ⚡ {rule['cat']} {sec}s | +{round(netto)}€ {'🎯 COLORE TOP' if col_score>0 else ''}" if netto>=18 or col_score>0 else ""
+                        ping=f"@here 🧥 GIUBBOTTO {sec}s | +{round(netto)}€" if rule['cat']=='giubbotto' else f"@here ⚡ {rule['cat']} {sec}s | +{round(netto)}€ {'🎯 COLORE TOP' if col_score>0 else ''}" if netto>=18 or col_score>0 else ""
                         await canale.send(content=ping,embed=emb)
                 await asyncio.sleep(0.4)
             except Exception as e:
@@ -207,5 +236,7 @@ if __name__=="__main__":
     tok=os.getenv("DISCORD_TOKEN")
     if tok:
         threading.Thread(target=run_flask,daemon=True).start()
-        print("🔥 Avvio V30.1 FIXATO - jeans solo Levi/Carhartt/Stone + fix totali")
+        print("🔥 Avvio V31.1 - PRIORITA GIUBBOTTO + BLACKLIST + FIX VISTI + FILTRO DANNEGGIATI")
         bot.run(tok)
+
+
