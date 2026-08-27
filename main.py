@@ -10,6 +10,10 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 VISTI_FILE="gia_visti.json"; PREF_FILE="preferenze_utenti.json"
 gia_visti=set(); vinted_session=None; last_session_refresh=0; ultimo_affare=None
+# DEBUG: contatori per capire dove si fermano gli annunci
+stats = {"scaricati":0,"vecchi":0,"blacklist":0,"danneggiato":0,"taglia_no":0,"bambino":0,
+         "brand_no":0,"regola_no":0,"netto_basso":0,"segnalati":0}
+ultimo_report = 0
 USER_AGENTS=["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36","Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1"]
 
 # V31.1 - GIUBBOTTI PRIMA, poi felpe senza ghost/denali, poi maglione, poi jeans solo 3 brand
@@ -139,7 +143,7 @@ async def on_message(message):
             await message.channel.send(f"🧠 Blacklistato: {ultimo_affare.get('titolo')[:50]}")
             return
 
-@tasks.loop(seconds=2.5)
+@tasks.loop(seconds=6)
 async def controllo_vinted():
     global ultimo_affare
     try:
@@ -163,32 +167,43 @@ async def controllo_vinted():
                     iid=str(item.get("id"))
                     if iid in gia_visti: continue
                     gia_visti.add(iid) # fix visti: subito dopo check, prima del try timestamp
+                    stats["scaricati"]+=1  # DEBUG
                     cts = item.get("created_at_ts") or item.get("created_at") or item.get("photo",{}).get("created_at_ts")
                     try:
                         cts = float(cts)
                         if cts > 1e10: cts = cts/1000
                         if time.time() - cts > 150:
+                            stats["vecchi"]+=1  # DEBUG
                             continue
                     except:
+                        stats["vecchi"]+=1  # DEBUG
                         continue
                     titolo=item.get("title",""); brand=item.get("brand_title",""); size=item.get("size_title","")
                     descrizione=item.get("description","") or ""
                     tl=(titolo+" "+descrizione).lower()
                     # BLACKLIST CHECK
                     if blacklist_globale and any(b in titolo.lower() for b in blacklist_globale):
+                        stats["blacklist"]+=1  # DEBUG
                         continue
                     # FIX 1 NUOVO: scarta capi danneggiati
                     if is_danneggiato(tl):
+                        stats["danneggiato"]+=1  # DEBUG
                         continue
                     try: prezzo=float(item.get("price",{}).get("amount"))
                     except: continue
-                    if not taglia_ok(size): continue
-                    if is_bambino(size,titolo,descrizione): continue
+                    if not taglia_ok(size):
+                        stats["taglia_no"]+=1  # DEBUG
+                        continue
+                    if is_bambino(size,titolo,descrizione):
+                        stats["bambino"]+=1  # DEBUG
+                        continue
                     if any(x in tl for x in ["shorts","bermuda","pantaloncini","t-shirt","magliettina","costume","intimo","bikini","canotta"]):
                         if not any(k in tl for k in ["felpa","maglione","giubbotto","giacca","jacket","parka","puffer","jeans","cargo","chino","501","505","double knee","single knee","work pant"]):
                             continue
                     brands_trovati = match_brand(titolo+" "+brand+" "+descrizione)
-                    if not brands_trovati: continue
+                    if not brands_trovati:
+                        stats["brand_no"]+=1  # DEBUG
+                        continue
                     # PRIORITA GIUBBOTTO
                     priorita_giubbotto = is_giubbotto_prioritario(titolo)
                     rule=None
@@ -205,9 +220,14 @@ async def controllo_vinted():
                             if not any(m in (titolo+" "+brand+" "+descrizione).lower() for m in rg["models"]): continue
                             if prezzo>rg["buy_max"]: continue
                             rule=rg; break
-                    if not rule: continue
+                    if not rule:
+                        stats["regola_no"]+=1  # DEBUG (brand giusto ma modello/prezzo fuori soglia)
+                        continue
                     netto = rule["sell_min"] - prezzo - 5
-                    if netto < 15: continue
+                    if netto < 15:
+                        stats["netto_basso"]+=1  # DEBUG
+                        continue
+                    stats["segnalati"]+=1  # DEBUG
                     link=f"https://www.vinted.it/items/{iid}"; foto=item.get("photo",{}).get("url","")
                     sec=int(time.time()-float(cts)) if cts else 0
                     ultimo_affare = {"titolo": titolo, "id": iid, "prezzo": prezzo}
@@ -225,10 +245,25 @@ async def controllo_vinted():
                         if foto: emb.set_image(url=foto)
                         ping=f"@here 🧥 GIUBBOTTO {sec}s | +{round(netto)}€" if rule['cat']=='giubbotto' else f"@here ⚡ {rule['cat']} {sec}s | +{round(netto)}€ {'🎯 COLORE TOP' if col_score>0 else ''}" if netto>=18 or col_score>0 else ""
                         await canale.send(content=ping,embed=emb)
-                await asyncio.sleep(0.4)
+                await asyncio.sleep(0.8)
             except Exception as e:
                 print(f"err {e}"); continue
         salva_visti()
+        # DEBUG: manda un report ogni 10 minuti su Discord con i contatori
+        global ultimo_report
+        if time.time() - ultimo_report > 600:
+            ultimo_report = time.time()
+            canale=None
+            for g in bot.guilds:
+                for ch in g.text_channels:
+                    if ch.permissions_for(g.me).send_messages: canale=ch; break
+                if canale: break
+            if canale:
+                r = (f"🧪 **DEBUG 10 min** — scaricati:{stats['scaricati']} vecchi:{stats['vecchi']} "
+                     f"blacklist:{stats['blacklist']} danneggiato:{stats['danneggiato']} taglia_no:{stats['taglia_no']} "
+                     f"bambino:{stats['bambino']} brand_no:{stats['brand_no']} regola_no:{stats['regola_no']} "
+                     f"netto_basso:{stats['netto_basso']} segnalati:{stats['segnalati']}")
+                await canale.send(r)
     except Exception as e:
         print(e)
 
