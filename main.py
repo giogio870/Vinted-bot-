@@ -19,23 +19,23 @@ USER_AGENTS=["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrom
 # V31.1 - GIUBBOTTI PRIMA, poi felpe senza ghost/denali, poi maglione, poi jeans solo 3 brand
 regole = [
   # GIUBBOTTI PRIMA - PRIORITA ASSOLUTA
-  {"brand":"polo ralph lauren","cat":"giubbotto","models":["harrington","windbreaker","overshirt","puffer","corduroy","polo","ralph","jacket","giubbotto","giacca","parka","piumino","cappotto"],"buy_max":40,"sell_min":65,"sell_max":85},
+  {"brand":"polo ralph lauren","cat":"giubbotto","models":["harrington","windbreaker","overshirt","puffer","corduroy","jacket","giubbotto","giacca","parka","piumino","cappotto"],"buy_max":40,"sell_min":65,"sell_max":85},
   {"brand":"tommy hilfiger","cat":"giubbotto","models":["sailing","coach","puffer","flag","harrington","giubbotto","giacca","jacket","parka","piumino"],"buy_max":35,"sell_min":55,"sell_max":75},
   {"brand":"carhartt","cat":"giubbotto","models":["detroit","michigan","og active jacket","detroit jacket","michigan coat","active jacket","giubbotto","giacca","parka"],"buy_max":40,"sell_min":75,"sell_max":95},
   {"brand":"north face","cat":"giubbotto","models":["nuptse","1996","1990 mountain","denali","gore-tex","mountain jacket","puffer","giubbotto","giacca","parka"],"buy_max":50,"sell_min":80,"sell_max":105},
   {"brand":"levi's","cat":"giubbotto","models":["trucker","type 3","sherpa","denim jacket","type iii","giubbotto","giacca","jacket"],"buy_max":26,"sell_min":45,"sell_max":65},
   {"brand":"stone island","cat":"giubbotto","models":["jacket","parka","puffer","ghost","membrana","nylon","overshirt","giubbotto","giacca","piumino","cappotto"],"buy_max":85,"sell_min":130,"sell_max":170},
-  # FELPE DOPO - SENZA ghost, denali, 1990 mountain (quelli sono giubbotti)
-  {"brand":"polo ralph lauren","cat":"felpa","models":["bear","big pony","crest","rl 67","knit","quarter zip","felpa"],"buy_max":23,"sell_min":35,"sell_max":45},
-  {"brand":"tommy hilfiger","cat":"felpa","models":["flag","crest","tommy jeans","spellout","big flag","felpa"],"buy_max":18,"sell_min":28,"sell_max":38},
-  {"brand":"carhartt","cat":"felpa","models":["chase","og active","american script","script","active hoodie","felpa"],"buy_max":28,"sell_min":45,"sell_max":60},
-  {"brand":"north face","cat":"felpa","models":["fleece","retro","1995","felpa"],"buy_max":28,"sell_min":50,"sell_max":70},
-  {"brand":"nike","cat":"felpa","models":["center swoosh","90s","vintage","track jacket","windrunner"],"buy_max":15,"sell_min":35,"sell_max":48},
-  {"brand":"stone island","cat":"felpa","models":["patch","crest","crewneck","hoodie","felpa"],"buy_max":40,"sell_min":70,"sell_max":95},
-  # MAGLIONI
-  {"brand":"polo ralph lauren","cat":"maglione","models":["cable knit","bear","quarter zip","cricket","knit","pony","maglione"],"buy_max":23,"sell_min":35,"sell_max":45},
-  {"brand":"tommy hilfiger","cat":"maglione","models":["flag","crest","tommy jeans","spellout","maglione"],"buy_max":18,"sell_min":28,"sell_max":38},
-  {"brand":"stone island","cat":"maglione","models":["knit","crewneck","patch","maglione"],"buy_max":40,"sell_min":70,"sell_max":90},
+  # FELPE - riportate parole generiche "felpa"/"hoodie" dove mancavano, tolto solo l'ambiguo "polo"/"ralph"
+  {"brand":"polo ralph lauren","cat":"felpa","models":["bear","big pony","crest","rl 67","knit","quarter zip","felpa","hoodie","sweatshirt"],"buy_max":25,"sell_min":35,"sell_max":45},
+  {"brand":"tommy hilfiger","cat":"felpa","models":["flag","crest","tommy jeans","spellout","big flag","felpa","hoodie","sweatshirt"],"buy_max":20,"sell_min":28,"sell_max":38},
+  {"brand":"carhartt","cat":"felpa","models":["chase","og active","american script","script","active hoodie","felpa","hoodie","sweatshirt"],"buy_max":28,"sell_min":45,"sell_max":60},
+  {"brand":"north face","cat":"felpa","models":["fleece","retro","1995","felpa","hoodie","sweatshirt"],"buy_max":28,"sell_min":50,"sell_max":70},
+  {"brand":"nike","cat":"felpa","models":["center swoosh","big swoosh","90s","vintage","track jacket","windrunner","felpa","hoodie","sweatshirt"],"buy_max":20,"sell_min":32,"sell_max":48},
+  {"brand":"stone island","cat":"felpa","models":["patch","crest","crewneck","hoodie","felpa","sweatshirt"],"buy_max":40,"sell_min":70,"sell_max":95},
+  # MAGLIONI - riportata parola generica "maglione"
+  {"brand":"polo ralph lauren","cat":"maglione","models":["cable knit","bear","quarter zip","cricket","knit","pony","maglione","sweater"],"buy_max":25,"sell_min":35,"sell_max":45},
+  {"brand":"tommy hilfiger","cat":"maglione","models":["flag","crest","tommy jeans","spellout","maglione","sweater"],"buy_max":20,"sell_min":28,"sell_max":38},
+  {"brand":"stone island","cat":"maglione","models":["knit","crewneck","patch","maglione","sweater"],"buy_max":40,"sell_min":70,"sell_max":90},
   # JEANS SOLO DOVE FAI SOLDI VERI - Polo/Tommy/Nike/North tolti
   {"brand":"carhartt","cat":"jeans","models":["double knee","single knee","work pant","double front","pant","jeans","cargo"],"buy_max":35,"sell_min":65,"sell_max":85},
   {"brand":"levi's","cat":"jeans","models":["501","505","511","512","chino","jeans","pantaloni lunghi"],"buy_max":22,"sell_min":45,"sell_max":65},
@@ -224,7 +224,7 @@ async def controllo_vinted():
                         stats["regola_no"]+=1  # DEBUG (brand giusto ma modello/prezzo fuori soglia)
                         continue
                     netto = rule["sell_min"] - prezzo - 5
-                    if netto < 15:
+                    if netto < 10:
                         stats["netto_basso"]+=1  # DEBUG
                         continue
                     stats["segnalati"]+=1  # DEBUG
@@ -273,5 +273,3 @@ if __name__=="__main__":
         threading.Thread(target=run_flask,daemon=True).start()
         print("🔥 Avvio V31.1 - PRIORITA GIUBBOTTO + BLACKLIST + FIX VISTI + FILTRO DANNEGGIATI")
         bot.run(tok)
-
-
