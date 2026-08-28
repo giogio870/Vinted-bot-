@@ -168,7 +168,7 @@ async def controllo_vinted():
                     if iid in gia_visti: continue
                     gia_visti.add(iid) # fix visti: subito dopo check, prima del try timestamp
                     stats["scaricati"]+=1  # DEBUG
-                    cts = item.get("created_at_ts") or item.get("created_at") or item.get("photo",{}).get("created_at_ts")
+                    cts = item.get("created_at_ts") or item.get("created_at") or item.get("photo",{}).get("created_at_ts") or item.get("photo",{}).get("high_resolution",{}).get("timestamp")
                     try:
                         cts = float(cts)
                         if cts > 1e10: cts = cts/1000
@@ -176,8 +176,7 @@ async def controllo_vinted():
                             stats["vecchi"]+=1  # DEBUG
                             continue
                     except:
-                        stats["vecchi"]+=1  # DEBUG
-                        continue
+                        pass  # timestamp mancante/campo cambiato: non scartiamo più, teniamo l'annuncio (order=newest_first + gia_visti ci proteggono già dai duplicati/vecchi)
                     titolo=item.get("title",""); brand=item.get("brand_title",""); size=item.get("size_title","")
                     descrizione=item.get("description","") or ""
                     tl=(titolo+" "+descrizione).lower()
@@ -229,7 +228,7 @@ async def controllo_vinted():
                         continue
                     stats["segnalati"]+=1  # DEBUG
                     link=f"https://www.vinted.it/items/{iid}"; foto=item.get("photo",{}).get("url","")
-                    sec=int(time.time()-float(cts)) if cts else 0
+                    sec=int(time.time()-float(cts)) if cts and isinstance(cts,(int,float)) else 0
                     ultimo_affare = {"titolo": titolo, "id": iid, "prezzo": prezzo}
                     col_score=colore_score(titolo)
                     # NB: repliche - il bot non le riconosce dal testo, controllare sempre le foto a occhio prima di comprare
@@ -264,6 +263,7 @@ async def controllo_vinted():
                      f"bambino:{stats['bambino']} brand_no:{stats['brand_no']} regola_no:{stats['regola_no']} "
                      f"netto_basso:{stats['netto_basso']} segnalati:{stats['segnalati']}")
                 await canale.send(r)
+                for k in stats: stats[k]=0  # DEBUG: azzero per la prossima finestra di 10 min
     except Exception as e:
         print(e)
 
