@@ -29,7 +29,6 @@ BRAND_ALIASES = {
     "nike": ["nike", "nikke"],
     "timberland": ["timberland", "timberlands"],
     "ralph lauren": ["ralph lauren", "polo ralph lauren", "raulph lauren", "ralf lauren"],
-    "lululemon": ["lululemon", "lulu lemon"],
     "stone island": ["stone island", "stoneisland", "ston island", "stone islan"],
     "stussy": ["stussy", "stüssy", "stussy"],
 }
@@ -54,6 +53,9 @@ DIFETTI_ESCLUSIONE = [
     "suola staccata","suola rotta","pelle rotta","crepe","deformata","deformato",
     "lacci mancanti","badge falso","badge non originale","trasparente",
     "tessuto consumato","gore-tex danneggiato","membrana danneggiata","riparato",
+    # ESCLUSIONE BAMBINO — vale per tutti i brand, priorità assoluta (soprattutto SI camicia/polo e Polo Bear)
+    "bambino","bambina","junior","kids","ragazzo 14 anni","12 anni","10 anni",
+    "da bambino","per bambino","child","kid","junior fit",
 ]
 STILE_PATTERN = re.compile(r'\b(simile a|ispirato a|inspired by|inspired)\b', re.I)
 
@@ -78,8 +80,8 @@ MODELLI = [
     {"id":"tnf_nuptse","brand":"the north face","nome":"1996/1990 Retro Nuptse",
      "keywords":["1996 retro nuptse","nuptse 1996","1996 nuptse","1990 retro nuptse","nuptse 1990",
                  "retro nuptse","nuptse 700","700 nuptse","nupste","nuptze"],
-     "escludi_se":["baltoro"],
-     "condizioni":{"ottime":{"auto_buy":60,"buy_max":80},
+     "escludi_se":["baltoro","gilet","vest","smanicato","chaleco","sin mangas"],
+     "condizioni":{"ottime":{"auto_buy":55,"buy_max":75},
                    "buone":{"buy_max":55},
                    "nuovo senza cartellino":{"buy_max":105},
                    "nuovo con cartellino":{"buy_max":130}},
@@ -89,7 +91,7 @@ MODELLI = [
     {"id":"carhartt_detroit","brand":"carhartt wip","nome":"Detroit/Michigan/Active Jacket",
      "keywords":["og detroit","detroit jacket","michigan coat","active jacket","carhartt wip detroit",
                  "carhartt detroit","hamilton brown","detroit brown"],
-     "condizioni":{"ottime":{"auto_buy":50,"buy_max":65},
+     "condizioni":{"ottime":{"auto_buy":45,"buy_max":60},
                    "buone":{"auto_buy":35,"buy_max":45},
                    "nuovo senza cartellino":{"buy_max":85},
                    "nuovo con cartellino":{"buy_max":110}},
@@ -98,7 +100,7 @@ MODELLI = [
 
     {"id":"arcteryx_atom_lt","brand":"arc'teryx","nome":"Atom LT",
      "keywords":["atom lt"],
-     "condizioni":{"ottime":{"auto_buy":55,"buy_max":75},
+     "condizioni":{"ottime":{"auto_buy":50,"buy_max":70},
                    "nuovo senza cartellino":{"buy_max":105},
                    "nuovo con cartellino":{"buy_max":125}},
      "sell_min":130,"sell_max":160,"profit_min":45},
@@ -126,7 +128,7 @@ MODELLI = [
 
     {"id":"patagonia_retrox","brand":"patagonia","nome":"Retro-X",
      "keywords":["retro-x","retro x","classic retro-x"],
-     "condizioni":{"ottime":{"auto_buy":30,"buy_max":45},
+     "condizioni":{"ottime":{"auto_buy":25,"buy_max":40},
                    "nuovo con cartellino":{"buy_max":60},"nuovo senza cartellino":{"buy_max":60}},
      "sell_min":75,"sell_max":95,"profit_min":35},
 
@@ -151,7 +153,7 @@ MODELLI = [
     {"id":"nike_techfleece_felpa","brand":"nike","nome":"Tech Fleece Felpa",
      "keywords":["tech fleece hoodie","tech fleece felpa","tech fleece crew"],
      "escludi_se":["nocta"],
-     "condizioni":{"ottime":{"auto_buy":25,"buy_max":35},
+     "condizioni":{"ottime":{"auto_buy":20,"buy_max":30},
                    "nuovo con cartellino":{"buy_max":45},"nuovo senza cartellino":{"buy_max":45}},
      "sell_min":70,"sell_max":90,"profit_min":35,
      "taglie_rifiuta":["XS"],"taglia_s_solo_sotto":25,
@@ -175,7 +177,7 @@ MODELLI = [
 
     {"id":"nike_nocta_hoodie","brand":"nike","nome":"Nocta Hoodie",
      "keywords":["nocta hoodie","nike x nocta hoodie","nocta tech hoodie"],
-     "condizioni":{"ottime":{"auto_buy":35,"buy_max":50},
+     "condizioni":{"ottime":{"auto_buy":30,"buy_max":45},
                    "nuovo con cartellino":{"buy_max":70},"nuovo senza cartellino":{"buy_max":70}},
      "sell_min":90,"sell_max":120,"profit_min":35},
 
@@ -194,7 +196,7 @@ MODELLI = [
     {"id":"timberland_wheat","brand":"timberland","nome":"Premium 6-Inch Wheat",
      "keywords":["premium 6-inch wheat","premium 6 inch wheat","6-inch premium","6 inch premium",
                  "wheat boot","wheat premium","yellow premium","gialla premium","gialle premium"],
-     "condizioni":{"ottime":{"auto_buy":20,"buy_max":32},
+     "condizioni":{"ottime":{"auto_buy":15,"buy_max":28},
                    "buone":{"buy_max":20},
                    "nuovo":{"buy_max":50}},
      "sell_min":75,"sell_max":90,"profit_min":35,
@@ -204,26 +206,14 @@ MODELLI = [
 
     {"id":"rl_polobear","brand":"ralph lauren","nome":"Polo Bear",
      "keywords":["polo bear","bear sweater","bear knit","polo bear knit","polo bear sweatshirt","polo bear hoodie"],
-     "condizioni":{"ottime":{"auto_buy":15,"buy_max":25},
-                   "nuovo con cartellino":{"buy_max":40},"nuovo senza cartellino":{"buy_max":40}},
-     "sell_min":70,"sell_max":90,"profit_min":35},
-
-    {"id":"lululemon_align","brand":"lululemon","nome":"Align Legging",
-     "keywords":["align legging","align pant","align high rise","align crop"],
      "condizioni":{"ottime":{"auto_buy":12,"buy_max":20},
-                   "nuovo senza cartellino":{"buy_max":25},"nuovo con cartellino":{"buy_max":30}},
-     "sell_min":55,"sell_max":70,"profit_min":25},
-
-    {"id":"lululemon_scuba","brand":"lululemon","nome":"Scuba Hoodie",
-     "keywords":["scuba hoodie","scuba full zip","scuba oversized"],
-     "condizioni":{"ottime":{"auto_buy":20,"buy_max":30},
-                   "nuovo senza cartellino":{"buy_max":35},"nuovo con cartellino":{"buy_max":45}},
-     "sell_min":65,"sell_max":85,"profit_min":25},
+                   "nuovo con cartellino":{"buy_max":35},"nuovo senza cartellino":{"buy_max":35}},
+     "sell_min":70,"sell_max":90,"profit_min":35,"taglia_s_solo_sotto":20},
 
     {"id":"si_crewneck","brand":"stone island","nome":"Sweatshirt/Crewneck",
      "keywords":["crewneck","sweatshirt","felpa girocollo"],
      "escludi_se":["hoodie","zip","overshirt","jacket","giacca"],
-     "condizioni":{"ottime":{"auto_buy":20,"buy_max":35},"nuovo":{"buy_max":55}},
+     "condizioni":{"ottime":{"auto_buy":15,"buy_max":30},"nuovo":{"buy_max":55}},
      "sell_min":60,"sell_max":80,"profit_min":45},
 
     {"id":"si_hoodie","brand":"stone island","nome":"Hoodie",
@@ -519,12 +509,11 @@ async def on_message(message):
 QUERY_FISSE = [
     "carhartt wip detroit", "north face nuptse", "arc'teryx atom lt", "nike tech fleece",
     "timberland premium 6-inch wheat", "ralph lauren polo bear", "patagonia better sweater",
-    "lululemon scuba",
 ]
 # Query SECONDARIE (17) — a rotazione, 2 per ciclo, così in ~9 cicli (~72 sec) le copri tutte
 QUERY_SECONDARIE = [
     "arc'teryx beta lt", "arc'teryx beta ar", "arc'teryx cerium lt",
-    "patagonia retro-x", "patagonia retro pile", "patagonia synchilla", "lululemon align",
+    "patagonia retro-x", "patagonia retro pile", "patagonia synchilla",
     "nike tech fleece jogger", "nike tech fleece tracksuit",
     "nike nocta",  # 1 query generica al posto delle 3 (hoodie/joggers/tracksuit li smista già valuta_articolo)
     "stussy 8 ball", "stussy world tour",  # slot liberati da Nocta, priorità #8 nel doc originale
@@ -587,9 +576,10 @@ async def controllo_vinted():
 
                     emoji = "🟢" if tier=="AUTO-BUY" else "🟡"
                     titolo_embed = f"{emoji} {tier} — {m['brand'].upper()} {m['nome']} | {prezzo}€ | netto stimato +{round(ris['profitto_netto'])}€"
+                    auto_buy_txt = f"{ris['auto_buy_soglia']}€" if ris['auto_buy_soglia'] is not None else "non definito per questa condizione"
                     desc = (f"**{ris['titolo']}**\n\n"
                             f"Modello: {m['nome']}\nCondizione: {ris['condizione']}\nTaglia: {ris['size']}\n"
-                            f"💰 Prezzo: {prezzo}€ (AUTO-BUY≤{ris['auto_buy_soglia']}€ | BUY MAX {ris['buy_max']}€)\n"
+                            f"💰 Prezzo: {prezzo}€ (AUTO-BUY≤{auto_buy_txt} | BUY MAX {ris['buy_max']}€)\n"
                             f"💸 SELL conservativo: {m['sell_min']}-{m['sell_max']}€\n"
                             f"📈 Profitto netto stimato: +{round(ris['profitto_netto'])}€ (min richiesto {m['profit_min']}€)\n"
                             f"⚠️ Verifica sempre le foto reali prima di comprare (rischio autenticità)\n"
