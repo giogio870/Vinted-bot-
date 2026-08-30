@@ -55,8 +55,27 @@ DIFETTI_ESCLUSIONE = [
     "tessuto consumato","gore-tex danneggiato","membrana danneggiata","riparato",
     # ESCLUSIONE BAMBINO — vale per tutti i brand, priorità assoluta (soprattutto SI camicia/polo e Polo Bear)
     "bambino","bambina","junior","kids","ragazzo 14 anni","12 anni","10 anni",
-    "da bambino","per bambino","child","kid","junior fit",
+    "da bambino","per bambino","child","kid","junior fit","14/16 anni","12/14 anni","8 anni",
 ]
+# Pattern generico "N anni" con N<18 — copre qualunque età da bambino scritta nel titolo,
+# oltre alle stringhe fisse sopra (che coprono formati particolari tipo "12/14 anni")
+BAMBINO_ETA_PATTERN = re.compile(r'\b(\d{1,2})\s*anni\b', re.I)
+
+def ha_eta_bambino(tl):
+    for m in BAMBINO_ETA_PATTERN.finditer(tl):
+        try:
+            if int(m.group(1)) < 18:
+                return True
+        except:
+            pass
+    return False
+
+# Codici taglia bambino (152/164/176 cm, YL/YM) — con \b per evitare di matchare
+# dentro un prezzo (es. "152€") o un altro numero/parola per puro caso
+BAMBINO_CODICI_PATTERN = re.compile(r'\b(152|164|176|YL|YM)\b', re.I)
+def ha_codice_bambino(tl):
+    return bool(BAMBINO_CODICI_PATTERN.search(tl))
+
 STILE_PATTERN = re.compile(r'\b(simile a|ispirato a|inspired by|inspired)\b', re.I)
 
 SELLER_RISCHIO_BRANDS = ["arc'teryx","stone island","the north face","carhartt wip","stussy","nike"]
@@ -91,7 +110,7 @@ MODELLI = [
     {"id":"carhartt_detroit","brand":"carhartt wip","nome":"Detroit/Michigan/Active Jacket",
      "keywords":["og detroit","detroit jacket","michigan coat","active jacket","carhartt wip detroit",
                  "carhartt detroit","hamilton brown","detroit brown"],
-     "condizioni":{"ottime":{"auto_buy":45,"buy_max":60},
+     "condizioni":{"ottime":{"auto_buy":50,"buy_max":65},
                    "buone":{"auto_buy":35,"buy_max":45},
                    "nuovo senza cartellino":{"buy_max":85},
                    "nuovo con cartellino":{"buy_max":110}},
@@ -100,7 +119,7 @@ MODELLI = [
 
     {"id":"arcteryx_atom_lt","brand":"arc'teryx","nome":"Atom LT",
      "keywords":["atom lt"],
-     "condizioni":{"ottime":{"auto_buy":50,"buy_max":70},
+     "condizioni":{"ottime":{"auto_buy":55,"buy_max":75},
                    "nuovo senza cartellino":{"buy_max":105},
                    "nuovo con cartellino":{"buy_max":125}},
      "sell_min":130,"sell_max":160,"profit_min":45},
@@ -128,7 +147,7 @@ MODELLI = [
 
     {"id":"patagonia_retrox","brand":"patagonia","nome":"Retro-X",
      "keywords":["retro-x","retro x","classic retro-x"],
-     "condizioni":{"ottime":{"auto_buy":25,"buy_max":40},
+     "condizioni":{"ottime":{"auto_buy":30,"buy_max":45},
                    "nuovo con cartellino":{"buy_max":60},"nuovo senza cartellino":{"buy_max":60}},
      "sell_min":75,"sell_max":95,"profit_min":35},
 
@@ -177,7 +196,7 @@ MODELLI = [
 
     {"id":"nike_nocta_hoodie","brand":"nike","nome":"Nocta Hoodie",
      "keywords":["nocta hoodie","nike x nocta hoodie","nocta tech hoodie"],
-     "condizioni":{"ottime":{"auto_buy":30,"buy_max":45},
+     "condizioni":{"ottime":{"auto_buy":35,"buy_max":50},
                    "nuovo con cartellino":{"buy_max":70},"nuovo senza cartellino":{"buy_max":70}},
      "sell_min":90,"sell_max":120,"profit_min":35},
 
@@ -196,7 +215,7 @@ MODELLI = [
     {"id":"timberland_wheat","brand":"timberland","nome":"Premium 6-Inch Wheat",
      "keywords":["premium 6-inch wheat","premium 6 inch wheat","6-inch premium","6 inch premium",
                  "wheat boot","wheat premium","yellow premium","gialla premium","gialle premium"],
-     "condizioni":{"ottime":{"auto_buy":15,"buy_max":28},
+     "condizioni":{"ottime":{"auto_buy":20,"buy_max":32},
                    "buone":{"buy_max":20},
                    "nuovo":{"buy_max":50}},
      "sell_min":75,"sell_max":90,"profit_min":35,
@@ -206,29 +225,39 @@ MODELLI = [
 
     {"id":"rl_polobear","brand":"ralph lauren","nome":"Polo Bear",
      "keywords":["polo bear","bear sweater","bear knit","polo bear knit","polo bear sweatshirt","polo bear hoodie"],
-     "condizioni":{"ottime":{"auto_buy":12,"buy_max":20},
-                   "nuovo con cartellino":{"buy_max":35},"nuovo senza cartellino":{"buy_max":35}},
+     "escludi_se":["patch","thermocollant","iron-on","iron on","toppa","écusson","aufnäher","sticker","pin","spilla"],
+     "condizioni":{"ottime":{"auto_buy":15,"buy_max":25},
+                   "nuovo con cartellino":{"buy_max":40},"nuovo senza cartellino":{"buy_max":40}},
      "sell_min":70,"sell_max":90,"profit_min":35,"taglia_s_solo_sotto":20},
+
+    {"id":"rl_polobear_zaino","brand":"ralph lauren","nome":"Polo Bear Zaino/Borsa",
+     "keywords":["polo bear zaino","polo bear rucksack","polo bear backpack","polo bear borsa",
+                 "bear zaino","bear rucksack","bear backpack","bear borsa"],
+     "escludi_se":["patch","thermocollant","iron-on","iron on","toppa","écusson","aufnäher","sticker","pin","spilla"],
+     "condizioni":{"ottime":{"auto_buy":20,"buy_max":25}},
+     "sell_min":75,"sell_max":85,"profit_min":35},
 
     {"id":"si_crewneck","brand":"stone island","nome":"Sweatshirt/Crewneck",
      "keywords":["crewneck","sweatshirt","felpa girocollo"],
      "escludi_se":["hoodie","zip","overshirt","jacket","giacca"],
-     "condizioni":{"ottime":{"auto_buy":15,"buy_max":30},"nuovo":{"buy_max":55}},
+     "condizioni":{"ottime":{"auto_buy":20,"buy_max":35},"nuovo":{"buy_max":55}},
      "sell_min":60,"sell_max":80,"profit_min":45},
 
     {"id":"si_hoodie","brand":"stone island","nome":"Hoodie",
      "keywords":["hoodie","felpa cappuccio"],
-     "escludi_se":["zip"],
+     "escludi_se":["zip","overshirt","jacket","giacca","giubbotto"],
      "condizioni":{"ottime":{"auto_buy":25,"buy_max":40},"nuovo":{"buy_max":65}},
      "sell_min":75,"sell_max":100,"profit_min":45},
 
     {"id":"si_ziphoodie","brand":"stone island","nome":"Zip Hoodie",
      "keywords":["zip hoodie","felpa cappuccio zip"],
+     "escludi_se":["overshirt","jacket","giacca","giubbotto"],
      "condizioni":{"ottime":{"auto_buy":30,"buy_max":45},"nuovo":{"buy_max":70}},
      "sell_min":85,"sell_max":110,"profit_min":45},
 
     {"id":"si_overshirt","brand":"stone island","nome":"Overshirt",
      "keywords":["overshirt"],
+     "escludi_se":["jacket","giacca","giubbotto"],
      "condizioni":{"ottime":{"auto_buy":40,"buy_max":60},"nuovo":{"buy_max":90}},
      "sell_min":110,"sell_max":140,"profit_min":45},
 
@@ -241,8 +270,13 @@ MODELLI = [
     # non valgono abbastanza da giustificare l'acquisto, come richiesto.
     {"id":"stussy_8ball","brand":"stussy","nome":"8 Ball / World Tour",
      "keywords":["8 ball","world tour"],
-     "condizioni":{"ottime":{"auto_buy":30,"buy_max":50},"nuovo":{"buy_max":70}},
-     "sell_min":80,"sell_max":110,"profit_min":35},
+     # deve essere abbigliamento vero, non un accessorio col grafismo 8 Ball
+     "richiedi_secondo":["t-shirt","tee","longsleeve","hoodie","felpa","sweat","sweatshirt","crewneck"],
+     "escludi_se":["porte cles","porte clés","portachiavi","keychain","keyring","charm",
+                   "portachiave","figure","palla","8 ball key","pendentif"],
+     "richiedi_taglia":True,
+     "condizioni":{"ottime":{"auto_buy":20,"buy_max":30}},
+     "sell_min":80,"sell_max":110,"profit_min":35,"taglia_s_solo_sotto":20},
 ]
 
 # Condizioni ammesse "buone" SOLO per questi modelli (regola 4/29 configurazione)
@@ -325,13 +359,17 @@ def colore_ok(modello_id, tl, keyword_matchata):
         return True
     return True
 
+def _match_parola_intera(keyword, testo):
+    # Confini di parola: evita che "new" matchi dentro "newsletter", "nuovo" dentro parole composte, ecc.
+    return re.search(r'\b' + re.escape(keyword) + r'\b', testo, re.I) is not None
+
 def rileva_condizione(item, tl):
     status = (item.get("status") or "").lower()
     testo = status + " " + tl
     # ordine: più specifico prima
     for cond in ["nuovo con cartellino","nuovo senza cartellino","nuovo","ottime","buone","discrete"]:
         for kw in CONDIZIONI_KEYWORDS[cond]:
-            if kw in testo:
+            if _match_parola_intera(kw, testo):
                 return cond
     return None
 
@@ -378,7 +416,7 @@ async def valuta_articolo(item):
     except: return None
 
     # 1. ESCLUSIONI GENERALI - priorità assoluta
-    if ha_difetto(tl):
+    if ha_difetto(tl) or ha_eta_bambino(tl) or ha_codice_bambino(tl):
         stats["escluso_difetto"]+=1
         return None
 
@@ -408,6 +446,19 @@ async def valuta_articolo(item):
 
     # 2b. COLORE BLOCCANTE (solo Timberland Wheat e Carhartt Brown, tutto il resto è soft)
     if not colore_ok(modello_trovato["id"], tl, keyword_matchata):
+        stats["modello_no"]+=1
+        return None
+
+    # 2c. RICHIEDI SECONDO — la keyword del modello da sola non basta, serve anche
+    # una parola che confermi che è abbigliamento vero (es. Stussy 8 Ball: non un portachiavi)
+    richiedi_secondo = modello_trovato.get("richiedi_secondo")
+    if richiedi_secondo and not any(w in tl for w in richiedi_secondo):
+        stats["modello_no"]+=1
+        return None
+
+    # 2d. RICHIEDI TAGLIA — se il modello deve avere una taglia dichiarata e manca,
+    # è quasi sempre un accessorio (portachiavi, spilla, ecc.), scartiamo
+    if modello_trovato.get("richiedi_taglia") and not size:
         stats["modello_no"]+=1
         return None
 
