@@ -1693,21 +1693,51 @@ def get_session():
     with session_lock:
         if (
             vinted_session is None
-            or now - last_session_refresh > 600
+            or now - last_session_refresh > 300
         ):
             try:
                 nuova = requests.Session()
 
+                ua = random.choice(USER_AGENTS)
+
+                # Header che simulano un browser reale â senza questi
+                # Vinted riconosce il bot e restituisce 403/503 su tutte le query
                 nuova.headers.update({
-                    "User-Agent": random.choice(USER_AGENTS),
-                    "Accept": "application/json",
-                    "Accept-Language": "it-IT,it;q=0.9,en;q=0.8",
+                    "User-Agent": ua,
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
+                    "Accept-Encoding": "gzip, deflate, br",
+                    "Connection": "keep-alive",
+                    "Upgrade-Insecure-Requests": "1",
+                    "Sec-Fetch-Dest": "document",
+                    "Sec-Fetch-Mode": "navigate",
+                    "Sec-Fetch-Site": "none",
+                    "Sec-Fetch-User": "?1",
+                })
+
+                # Visita la homepage prima per ottenere i cookie di sessione â
+                # senza questo le richieste API vengono bloccate (403/503)
+                try:
+                    nuova.get(
+                        "https://www.vinted.it",
+                        timeout=15,
+                        allow_redirects=True
+                    )
+                    time.sleep(random.uniform(1.0, 2.0))
+                except Exception:
+                    pass
+
+                # Ora switcha agli header API
+                nuova.headers.update({
+                    "Accept": "application/json, text/plain, */*",
+                    "Referer": "https://www.vinted.it/",
+                    "X-Requested-With": "XMLHttpRequest",
                 })
 
                 vinted_session = nuova
                 last_session_refresh = now
 
-                log.info("Sessione HTTP inizializzata")
+                log.info("Sessione HTTP inizializzata con cookie")
 
             except Exception as exc:
                 log.error(
@@ -1778,8 +1808,9 @@ async def vinted_get(session, url, headers):
             stats["errori_http"] += 1
 
             log.warning(
-                "HTTP %s su Vinted",
-                response.status_code
+                "HTTP %s su Vinted (url: %s)",
+                response.status_code,
+                url[:80]
             )
 
             return None
