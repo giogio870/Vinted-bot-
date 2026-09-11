@@ -253,13 +253,11 @@ BRAND_ALIASES = {
     "stussy": [
         "stussy",
     ],
-    "new balance": [
-        "new balance",
-        "newbalance",
+    "moncler": [
+        "moncler",
     ],
-    "ugg": [
-        "ugg",
-        "uggs",
+    "lacoste": [
+        "lacoste",
     ],
 }
 
@@ -637,8 +635,7 @@ SELLER_RISCHIO_BRANDS = [
     "carhartt wip",
     "stussy",
     "nike",
-    "ugg",
-    "new balance",
+    "moncler",
 ]
 
 
@@ -1419,63 +1416,116 @@ MODELLI = [
     },
 
     {
-        "id": "ugg_ultramini",
-        "brand": "ugg",
-        "nome": "Ultra Mini",
-        "query": "ugg ultra mini",
+        "id": "moncler_piumino",
+        "brand": "moncler",
+        "nome": "Piumino Moncler",
+        "query": "moncler piumino",
         "keywords": [
-            "ultra mini"
+            "moncler",
         ],
         "escludi_se": [
-            "kids",
+            "gilet",
+            "vest",
+            "smanicato",
             "bambino",
-            "bimba",
+            "bambina",
             "bimbo",
+            "bimba",
+            "replica",
+            "fake",
         ],
         "condizioni": {
             "ottime": {
-                "auto_buy": 45,
-                "buy_max": 60
+                "auto_buy": 80,
+                "buy_max": 130
+            },
+            "buone": {
+                "auto_buy": 55,
+                "buy_max": 90
             },
             "nuovo senza cartellino": {
-                "buy_max": 85
+                "buy_max": 180
             },
             "nuovo con cartellino": {
-                "buy_max": 95
+                "buy_max": 220
             },
         },
-        "sell_min": 100,
-        "sell_max": 130,
-        "profit_min": 30,
+        "sell_min": 200,
+        "sell_max": 320,
+        "profit_min": 50,
+        "taglie_rifiuta": ["XS"],
     },
 
     {
-        "id": "nb_9060",
-        "brand": "new balance",
-        "nome": "9060",
-        "query": "new balance 9060",
+        "id": "lacoste_felpa",
+        "brand": "lacoste",
+        "nome": "Lacoste Felpa/Maglione",
+        "query": "lacoste felpa",
         "keywords": [
-            "9060"
+            "felpa lacoste",
+            "lacoste felpa",
+            "lacoste hoodie",
+            "lacoste sweatshirt",
+            "maglione lacoste",
+            "lacoste maglione",
         ],
         "escludi_se": [
-            "kids",
+            "replica",
+            "fake",
             "bambino",
+            "bambina",
         ],
         "condizioni": {
             "ottime": {
-                "auto_buy": 30,
-                "buy_max": 40
+                "auto_buy": 12,
+                "buy_max": 20
             },
             "nuovo senza cartellino": {
-                "buy_max": 60
+                "buy_max": 30
             },
             "nuovo con cartellino": {
-                "buy_max": 70
+                "buy_max": 40
             },
         },
-        "sell_min": 75,
-        "sell_max": 110,
+        "sell_min": 38,
+        "sell_max": 55,
         "profit_min": 25,
+        "taglie_rifiuta": ["XS"],
+    },
+
+    {
+        "id": "lacoste_polo",
+        "brand": "lacoste",
+        "nome": "Lacoste Polo",
+        "query": "lacoste polo",
+        "keywords": [
+            "polo lacoste",
+            "lacoste polo",
+            "lacoste l.12.12",
+            "l.12.12",
+        ],
+        "escludi_se": [
+            "replica",
+            "fake",
+            "bambino",
+            "bambina",
+        ],
+        "condizioni": {
+            "ottime": {
+                "auto_buy": 8,
+                "buy_max": 15
+            },
+            "nuovo senza cartellino": {
+                "buy_max": 22
+            },
+            "nuovo con cartellino": {
+                "buy_max": 30
+            },
+        },
+        "sell_min": 28,
+        "sell_max": 42,
+        "profit_min": 20,
+        "taglie_rifiuta": ["XS"],
     },
 
     {
@@ -1547,6 +1597,7 @@ QUERY_FISSE = [
     "timberland premium 6-inch wheat",
     "ralph lauren polo bear",
     "patagonia better sweater",
+    "lacoste felpa",
 ]
 
 
@@ -1568,8 +1619,8 @@ QUERY_SECONDARIE = [
     "stone island overshirt",
     "stone island jacket",
     "polo bear zaino",
-    "ugg ultra mini",
-    "new balance 9060",
+    "moncler piumino",
+    "lacoste polo",
 ]
 
 
@@ -3406,4 +3457,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
