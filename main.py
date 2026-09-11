@@ -2722,8 +2722,9 @@ async def scansione_query(
         data = response.json()
     except ValueError:
         log.warning(
-            "Risposta non JSON per query %s",
-            query
+            "Risposta non JSON per query %s â primi 200 char: %s",
+            query,
+            response.text[:200].replace('\n', ' ')
         )
         return
 
@@ -3405,3 +3406,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
