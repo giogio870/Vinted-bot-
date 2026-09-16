@@ -26,6 +26,9 @@ import asyncio
 import logging
 import os
 import re
+import shutil
+import subprocess
+import sys
 import time
 import unicodedata
 import urllib.parse
@@ -33,13 +36,12 @@ from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 
-import aiohttp
 import sqlite3
 import threading
 from flask import Flask, jsonify
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 import discord
 from discord.ext import commands
-from playwright.async_api import async_playwright
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1347,287 +1349,242 @@ def is_blacklisted(iid):
 carica_stato()
 
 # ================================================================
-# BROWSER VINTED (PLAYWRIGHT)
+# HTTP VINTED
 # ================================================================
 
-# Nel 2026 l'endpoint catalog/items puo' rispondere 401 se chiamato
-# direttamente senza la sessione web che Vinted crea nel browser.
-# Usiamo quindi un browser Playwright normale per inizializzare la
-# sessione e poi effettuiamo le richieste API tramite lo stesso contesto.
-# Nessun token/cookie viene richiesto all'utente e non viene fatto alcun
-# bypass di CAPTCHA, Cloudflare o sistemi anti-bot.
-
-vinted_playwright = None
+vinted_browser = None
 vinted_context = None
 vinted_page = None
-vinted_browser_ready = False
 vinted_403_until = 0.0
-vinted_session_error_until = 0.0
+vinted_browser_ready = False
 
 USER_AGENT = (
-    "Mozilla/5.0 (X11; Linux x86_64) "
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/131.0.0.0 Safari/537.36"
 )
 
-BROWSER_PROFILE_DIR = Path(
-    os.getenv(
-        "BROWSER_PROFILE_DIR",
-        str(BASE_DIR / "vinted_browser_profile"),
+BROWSER_PROFILE_DIR = Path(os.getenv(
+    "VINTED_BROWSER_PROFILE",
+    str(BASE_DIR / "vinted_browser_profile"),
+))
+
+async def _avvia_chromium_persistent(pw):
+    """Avvia Chromium usando la versione installata per il pacchetto Python Playwright.
+
+    Se il browser non e' presente (caso comune su un nuovo deploy), prova una
+    sola installazione tramite lo stesso interprete Python del servizio.
+    Nessun bypass di CAPTCHA o anti-bot.
+    """
+    headless = os.getenv("VINTED_HEADLESS", "true").strip().lower() != "false"
+    launch_kwargs = {
+        "user_data_dir": str(BROWSER_PROFILE_DIR),
+        "headless": headless,
+        "viewport": {"width": 1440, "height": 900},
+        "locale": "it-IT",
+        "user_agent": USER_AGENT,
+        "args": ["--disable-notifications", "--no-sandbox", "--disable-dev-shm-usage"],
+    }
+
+    try:
+        return await pw.chromium.launch_persistent_context(**launch_kwargs)
+    except Exception as first_exc:
+        log.warning("Chromium Playwright non disponibile: %s", first_exc)
+        log.info("Installazione Chromium per il pacchetto Python Playwright...")
+
+        env = os.environ.copy()
+        env.setdefault("PLAYWRIGHT_BROWSERS_PATH", os.path.expanduser("~/.cache/ms-playwright"))
+        try:
+            proc = await asyncio.to_thread(
+                subprocess.run,
+                [sys.executable, "-m", "playwright", "install", "chromium"],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+        except Exception as exc:
+            raise RuntimeError(f"Impossibile installare Chromium Playwright: {exc}") from first_exc
+
+        if proc.returncode != 0:
+            details = (proc.stderr or proc.stdout or "").strip()[-2000:]
+            raise RuntimeError(
+                "Installazione Chromium fallita" + (f": {details}" if details else "")
+            ) from first_exc
+
+        log.info("Chromium installato. Nuovo tentativo di avvio.")
+        try:
+            return await pw.chromium.launch_persistent_context(**launch_kwargs)
+        except Exception as second_exc:
+            # Ultimo fallback: browser di sistema, se presente.
+            system_browser = (
+                os.getenv("PLAYWRIGHT_BROWSER_PATH", "").strip()
+                or shutil.which("chromium")
+                or shutil.which("chromium-browser")
+                or shutil.which("google-chrome")
+                or shutil.which("google-chrome-stable")
+            )
+            if system_browser:
+                log.info("Uso Chromium/Chrome di sistema: %s", system_browser)
+                launch_kwargs["executable_path"] = system_browser
+                return await pw.chromium.launch_persistent_context(**launch_kwargs)
+            raise RuntimeError(
+                f"Chromium non avviabile dopo installazione: {second_exc}"
+            ) from second_exc
+
+
+async def crea_sessione_vinted():
+    """Avvia un browser Chromium e mantiene una sessione persistente.
+
+    Non usa token/cookie forniti dall'utente e non tenta bypass di CAPTCHA
+    o sistemi anti-bot. Se Vinted blocca la sessione, il bot non tenta
+    di aggirare il blocco.
+    """
+    global vinted_browser, vinted_context, vinted_page, vinted_browser_ready
+
+    if vinted_page is not None and not vinted_page.is_closed():
+        return vinted_page
+
+    BROWSER_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+    pw = await async_playwright().start()
+
+    try:
+        vinted_context = await _avvia_chromium_persistent(pw)
+    except Exception:
+        await pw.stop()
+        raise
+
+    vinted_browser = pw
+    vinted_page = (
+        vinted_context.pages[0]
+        if vinted_context.pages
+        else await vinted_context.new_page()
     )
-)
+    vinted_browser_ready = False
 
-VINTED_HOME = "https://www.vinted.it/"
-VINTED_API_BASE = "https://www.vinted.it/api/v2/catalog/items"
+    try:
+        response = await vinted_page.goto(
+            "https://www.vinted.it/",
+            wait_until="domcontentloaded",
+            timeout=30000,
+        )
+        status = response.status if response else 0
+        if status in (401, 403, 429):
+            log.warning(
+                "Vinted homepage HTTP %s: sessione browser non pronta.",
+                status,
+            )
+        else:
+            vinted_browser_ready = True
+            log.info("Sessione browser Vinted pronta | homepage=%s", status)
+    except PlaywrightTimeoutError:
+        log.warning("Timeout caricamento homepage Vinted.")
+    except Exception as exc:
+        log.warning("Errore apertura homepage Vinted: %s", exc)
 
+    return vinted_page
 
-class VintedSessionBlocked(Exception):
-    """Vinted richiede una verifica/challenge che il bot non tenta di bypassare."""
-
-
-async def _chiudi_browser_vinted():
-    global vinted_playwright
-    global vinted_context
-    global vinted_page
-    global vinted_browser_ready
+async def chiudi_sessione_vinted():
+    global vinted_browser, vinted_context, vinted_page, vinted_browser_ready
 
     try:
         if vinted_context is not None:
             await vinted_context.close()
-    except Exception as exc:
-        log.warning("Errore chiusura contesto Vinted: %s", exc)
+    except Exception:
+        pass
 
     try:
-        if vinted_playwright is not None:
-            await vinted_playwright.stop()
-    except Exception as exc:
-        log.warning("Errore chiusura Playwright: %s", exc)
+        if vinted_browser is not None:
+            await vinted_browser.stop()
+    except Exception:
+        pass
 
-    vinted_playwright = None
+    vinted_browser = None
     vinted_context = None
     vinted_page = None
     vinted_browser_ready = False
 
+async def vinted_catalog_browser(page, query):
+    """Carica la ricerca Vinted dal browser e cattura la risposta catalogo.
 
-async def _pagina_vinted_sembra_challenge(page):
-    try:
-        url = (page.url or "").lower()
-        title = (await page.title()).lower()
-        body = (await page.locator("body").inner_text(timeout=3000)).lower()[:5000]
-    except Exception:
-        return False
+    La richiesta API, se presente, e' quella generata dalla normale pagina
+    Vinted nel browser. Non vengono creati token, cookie o header speciali.
+    """
+    global vinted_403_until
 
-    indicatori = (
-        "captcha",
-        "verify you are human",
-        "verifica che sei umano",
-        "just a moment",
-        "checking your browser",
-        "attention required",
-        "access denied",
-        "cf-chl-",
+    if time.time() < vinted_403_until:
+        return None
+
+    encoded = urllib.parse.quote(query)
+    url = (
+        "https://www.vinted.it/catalog"
+        f"?search_text={encoded}"
+        "&order=newest_first"
     )
 
-    return any(x in url or x in title or x in body for x in indicatori)
+    captured = {"data": None, "status": None}
 
-
-async def crea_sessione_vinted(force=False):
-    """Avvia un browser Chromium persistente e inizializza la sessione web Vinted."""
-    global vinted_playwright
-    global vinted_context
-    global vinted_page
-    global vinted_browser_ready
-
-    if (
-        not force
-        and vinted_browser_ready
-        and vinted_context is not None
-        and vinted_page is not None
-        and not vinted_page.is_closed()
-    ):
-        return vinted_context
-
-    await _chiudi_browser_vinted()
-
-    BROWSER_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-
-    try:
-        vinted_playwright = await async_playwright().start()
-
-        launch_kwargs = {
-            "user_data_dir": str(BROWSER_PROFILE_DIR),
-            "headless": True,
-            "viewport": {"width": 1440, "height": 900},
-            "locale": "it-IT",
-            "user_agent": USER_AGENT,
-            "args": ["--disable-dev-shm-usage", "--no-sandbox"],
-        }
-
-        # Prima prova il Chrome installato, poi Chromium gestito da Playwright.
+    async def on_response(response):
+        if "/api/v2/catalog/items" not in response.url:
+            return
+        if response.status != 200:
+            captured["status"] = response.status
+            return
         try:
-            vinted_context = await vinted_playwright.chromium.launch_persistent_context(
-                channel="chrome",
-                **launch_kwargs,
-            )
-        except Exception as chrome_exc:
-            log.warning("Chrome non disponibile su Render: %s", chrome_exc)
-            vinted_context = await vinted_playwright.chromium.launch_persistent_context(
-                **launch_kwargs,
-            )
+            captured["data"] = await response.json()
+        except Exception:
+            pass
 
-        pages = vinted_context.pages
-        vinted_page = pages[0] if pages else await vinted_context.new_page()
-
-        vinted_page.set_default_timeout(15000)
-
-        log.info("Apertura sessione browser Vinted...")
-        await vinted_page.goto(
-            VINTED_HOME,
+    page.on("response", on_response)
+    try:
+        response = await page.goto(
+            url,
             wait_until="domcontentloaded",
             timeout=30000,
         )
+        homepage_status = response.status if response else 0
 
-        # Lascia al sito il tempo normale di inizializzare cookie/sessione.
-        await vinted_page.wait_for_timeout(2500)
+        # Lascia il tempo al frontend di effettuare la normale chiamata catalogo.
+        for _ in range(12):
+            if captured["data"] is not None:
+                break
+            await asyncio.sleep(0.5)
 
-        if await _pagina_vinted_sembra_challenge(vinted_page):
-            raise VintedSessionBlocked(
-                "Vinted ha mostrato una verifica/challenge. Nessun bypass eseguito."
+        if captured["data"] is not None:
+            return captured["data"]
+
+        status = captured["status"] or homepage_status
+        if status == 403:
+            stats["http_403"] += 1
+            vinted_403_until = time.time() + VINTED_403_COOLDOWN
+            log.error(
+                "Vinted ha restituito HTTP 403 dal browser: pausa %ss; nessun bypass.",
+                VINTED_403_COOLDOWN,
             )
+        elif status == 429:
+            stats["rate_limit"] += 1
+            log.warning("Vinted ha restituito HTTP 429 dal browser.")
+        elif status:
+            stats["errori_http"] += 1
+            log.warning("HTTP %s su Vinted browser per query '%s'.", status, query)
+        else:
+            stats["errori_http"] += 1
+            log.warning("Nessuna risposta catalogo catturata per '%s'.", query)
 
-        vinted_browser_ready = True
-        log.info(
-            "Sessione browser Vinted pronta | url=%s",
-            vinted_page.url,
-        )
-        return vinted_context
-
-    except VintedSessionBlocked as exc:
-        log.error("Sessione Vinted bloccata: %s", exc)
-        await _chiudi_browser_vinted()
         return None
-
+    except PlaywrightTimeoutError:
+        stats["errori_http"] += 1
+        log.warning("Timeout ricerca Vinted browser: %s", query)
+        return None
     except Exception as exc:
-        log.exception("Impossibile inizializzare Playwright/Vinted: %s", exc)
-        await _chiudi_browser_vinted()
+        stats["errori_http"] += 1
+        log.warning("Errore Vinted browser per '%s': %s", query, exc)
         return None
-
-
-async def chiudi_sessione_vinted():
-    await _chiudi_browser_vinted()
-
-
-async def _vinted_response_json(response):
-    try:
-        return await response.json()
-    except Exception:
+    finally:
         try:
-            text = await response.text()
-            return __import__("json").loads(text)
+            page.remove_listener("response", on_response)
         except Exception:
-            return None
-
-
-async def vinted_get(_session, url, headers=None):
-    """GET Vinted usando il contesto browser Playwright e la sua sessione web."""
-    global vinted_403_until
-    global vinted_session_error_until
-
-    now = time.time()
-
-    if now < vinted_403_until or now < vinted_session_error_until:
-        return None
-
-    context = await crea_sessione_vinted()
-    if context is None:
-        vinted_session_error_until = time.time() + 120
-        return None
-
-    req_headers = {
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "it-IT,it;q=0.9,en;q=0.8",
-        "Referer": VINTED_HOME,
-        "User-Agent": USER_AGENT,
-    }
-    if headers:
-        req_headers.update(headers)
-
-    delays = [2.0, 5.0, 10.0]
-
-    for tentativo in range(3):
-        try:
-            response = await context.request.get(
-                url,
-                headers=req_headers,
-                timeout=15000,
-            )
-            status = response.status
-
-            if status == 200:
-                vinted_session_error_until = 0.0
-                data = await _vinted_response_json(response)
-                if isinstance(data, dict):
-                    return data
-                log.warning("Risposta Vinted 200 ma JSON non valido")
-                return None
-
-            if status == 401:
-                # Una volta sola: ricrea la normale sessione web e riprova.
-                # Non vengono forniti token/cookie manualmente e non si bypassa
-                # alcun controllo anti-bot.
-                log.warning(
-                    "HTTP 401 Vinted: rinnovo sessione browser e riprovo una volta."
-                )
-                await _chiudi_browser_vinted()
-                context = await crea_sessione_vinted(force=True)
-                if context is None:
-                    vinted_session_error_until = time.time() + 120
-                    return None
-                continue
-
-            if status == 403:
-                stats["http_403"] += 1
-                vinted_403_until = time.time() + VINTED_403_COOLDOWN
-                log.error(
-                    "HTTP 403 Vinted: pausa %ss; nessun bypass/retry aggressivo.",
-                    VINTED_403_COOLDOWN,
-                )
-                return None
-
-            if status == 429:
-                stats["rate_limit"] += 1
-                retry_after = response.headers.get("retry-after")
-                try:
-                    delay = float(retry_after)
-                except (TypeError, ValueError):
-                    delay = delays[tentativo]
-                await asyncio.sleep(min(max(delay, 2.0), 60.0))
-                continue
-
-            if status in (500, 502, 503, 504):
-                stats["errori_http"] += 1
-                await asyncio.sleep(delays[tentativo])
-                continue
-
-            stats["errori_http"] += 1
-            log.warning("HTTP %s su Vinted", status)
-            return None
-
-        except PlaywrightTimeoutError as exc:
-            stats["errori_http"] += 1
-            log.warning("Timeout Vinted tentativo %s: %s", tentativo + 1, exc)
-            await asyncio.sleep(delays[tentativo])
-
-        except Exception as exc:
-            stats["errori_http"] += 1
-            log.warning(
-                "Errore browser/API Vinted tentativo %s: %s",
-                tentativo + 1,
-                exc,
-            )
-            await asyncio.sleep(delays[tentativo])
-
-    return None
+            pass
 
 # ================================================================
 # QUERY / SCHEDULER
@@ -1772,32 +1729,13 @@ async def invia_notifica(res):
 # ================================================================
 
 async def scansione_query(
-    session,
+    page,
     query,
 ):
     global ultimo_affare
     global nuovi_dal_salvataggio
 
-    encoded = urllib.parse.quote(query)
-
-    url = (
-        "https://www.vinted.it/api/v2/catalog/items"
-        f"?search_text={encoded}"
-        "&order=newest_first"
-        "&per_page=20"
-    )
-
-    headers = {
-        "User-Agent": USER_AGENT,
-        "Accept": "application/json",
-        "Referer": "https://www.vinted.it/",
-    }
-
-    data = await vinted_get(
-        session,
-        url,
-        headers,
-    )
+    data = await vinted_catalog_browser(page, query)
 
     if data is None:
         return
@@ -1896,7 +1834,7 @@ async def controllo_vinted():
         return
 
     async with scanner_lock:
-        session = await crea_sessione_vinted()
+        page = await crea_sessione_vinted()
         now = time.time()
 
         secondarie_due = [
@@ -1926,7 +1864,7 @@ async def controllo_vinted():
         for query in queries:
             try:
                 await scansione_query(
-                    session,
+                    page,
                     query,
                 )
             except Exception as exc:
