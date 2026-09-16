@@ -39,6 +39,7 @@ import threading
 from flask import Flask, jsonify
 import discord
 from discord.ext import commands
+from playwright.async_api import async_playwright
 
 logging.basicConfig(
     level=logging.INFO,
