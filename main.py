@@ -1385,13 +1385,15 @@ async def crea_sessione_vinted():
 
     try:
         vinted_context = await pw.chromium.launch_persistent_context(
-            user_data_dir=str(BROWSER_PROFILE_DIR),
-            channel="chrome",
-            headless=os.getenv("VINTED_HEADLESS", "false").strip().lower() == "true",
+             user_data_dir=str(BROWSER_PROFILE_DIR),
+             channel="chrome",
+            headless=True,
             viewport={"width": 1440, "height": 900},
             locale="it-IT",
             user_agent=USER_AGENT,
             args=["--disable-notifications"],
+)
+
         )
     except Exception:
         # Fallback al Chromium installato da Playwright. Nessun bypass.
