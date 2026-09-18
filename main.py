@@ -28,7 +28,6 @@ import os
 import re
 import time
 import unicodedata
-import urllib.parse
 from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
@@ -36,7 +35,7 @@ from pathlib import Path
 import sqlite3
 import threading
 from flask import Flask, jsonify
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+import requests
 import discord
 from discord.ext import commands
 
@@ -143,11 +142,6 @@ def nuove_stats():
         "duplicati": 0,
         "rate_limit": 0,
         "errori_http": 0,
-        "http_401": 0,
-        "http_5xx": 0,
-        "risposte_catalogo": 0,
-        "items_ricevuti": 0,
-        "sessione_non_pronta": 0,
         "http_403": 0,
         "notifiche_fallite": 0,
     }
@@ -1352,350 +1346,195 @@ def is_blacklisted(iid):
 carica_stato()
 
 # ================================================================
-# HTTP VINTED / PLAYWRIGHT
+# HTTP VINTED - requests only
 # ================================================================
 
-vinted_playwright = None
-vinted_browser = None
-vinted_context = None
-vinted_page = None
-vinted_request = None
+vinted_session = None
+vinted_session_lock = threading.Lock()
+vinted_session_created = 0.0
 vinted_403_until = 0.0
-vinted_browser_ready = False
-vinted_last_bootstrap = 0.0
 
 USER_AGENT = (
-    "Mozilla/5.0 (X11; Linux x86_64) "
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/131.0.0.0 Safari/537.36"
 )
 
-BROWSER_HEADLESS = os.getenv("VINTED_HEADLESS", "true").strip().lower() != "false"
 
-# Sessione in RAM: niente profilo persistente e niente cookie/token messi a mano.
-# Questo riduce molto il consumo di memoria su Render e forza una sessione pulita
-# quando il browser viene ricreato.
+def _nuova_sessione_http():
+    """Crea una normale requests.Session e visita prima la homepage.
 
-async def _blocca_risorse_pesanti(route):
-    try:
-        resource_type = route.request.resource_type
-        if resource_type in {"image", "media", "font", "websocket"}:
-            await route.abort()
-        else:
-            await route.continue_()
-    except Exception:
-        try:
-            await route.continue_()
-        except Exception:
-            pass
-
-async def crea_sessione_vinted(force=False):
-    """Crea UNA sola sessione browser leggera e la riusa per tutte le query.
-
-    Il browser visita normalmente Vinted per ottenere la sessione web necessaria.
-    Non vengono inseriti token/cookie dell'utente e non viene effettuato alcun
-    bypass di CAPTCHA/anti-bot. Se Vinted presenta un challenge o blocca la
-    sessione, la scansione viene fermata e riprovata piu' tardi.
+    Vinted oggi puo' richiedere il cookie access_token_web prima di accettare
+    /api/v2/catalog/items. Non vengono inseriti token/cookie manualmente e non
+    vengono aggirati CAPTCHA o sistemi anti-abuso.
     """
-    global vinted_playwright, vinted_browser, vinted_context, vinted_page, vinted_request
-    global vinted_browser_ready, vinted_last_bootstrap
+    global vinted_session, vinted_session_created
 
-    if (
-        not force
-        and vinted_page is not None
-        and not vinted_page.is_closed()
-        and vinted_request is not None
-        and vinted_browser_ready
-    ):
-        return vinted_page
-
-    if force:
-        await chiudi_sessione_vinted()
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": USER_AGENT,
+        "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+    })
 
     try:
-        pw = await async_playwright().start()
-
-        # Chromium Playwright installato in build: niente channel="chrome"
-        # e niente dipendenza dal Chrome del sistema Render.
-        browser = await pw.chromium.launch(
-            headless=BROWSER_HEADLESS,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--disable-software-rasterizer",
-                "--disable-background-networking",
-                "--disable-background-timer-throttling",
-                "--disable-renderer-backgrounding",
-            ],
-        )
-
-        context = await browser.new_context(
-            viewport={"width": 1280, "height": 720},
-            locale="it-IT",
-            user_agent=USER_AGENT,
-            extra_http_headers={
-                "Accept-Language": "it-IT,it;q=0.9,en;q=0.7",
-            },
-        )
-
-        await context.route("**/*", _blocca_risorse_pesanti)
-
-        page = await context.new_page()
-        page.set_default_timeout(15000)
-        page.set_default_navigation_timeout(25000)
-
-        # La homepage e' il bootstrap normale della sessione web.
-        response = await page.goto(
+        response = session.get(
             "https://www.vinted.it/",
-            wait_until="domcontentloaded",
-            timeout=25000,
+            timeout=15,
+            allow_redirects=True,
         )
-        status = response.status if response else 0
-
-        # Attendi solo il minimo necessario per cookie/sessione.
-        await page.wait_for_timeout(1200)
-
-        cookies = await context.cookies("https://www.vinted.it/")
-        cookie_names = {c.get("name") for c in cookies}
-        has_web_token = "access_token_web" in cookie_names
-
-        if status in (401, 403, 429):
-            log.warning(
-                "Bootstrap Vinted HTTP %s | access_token_web=%s",
-                status,
-                has_web_token,
-            )
-
-        if not has_web_token:
-            log.warning(
-                "Bootstrap Vinted senza access_token_web | HTTP=%s",
-                status,
-            )
-
-        # APIRequestContext associato al BrowserContext: usa automaticamente
-        # il cookie jar appena creato dal browser.
-        request = context.request
-
-        vinted_playwright = pw
-        vinted_browser = browser
-        vinted_context = context
-        vinted_page = page
-        vinted_request = request
-        vinted_browser_ready = bool(status in range(200, 400) or has_web_token)
-        vinted_last_bootstrap = time.time()
-
+        token_cookie = any(
+            c.name == "access_token_web"
+            for c in session.cookies
+        )
         log.info(
-            "Sessione Vinted pronta | HTTP=%s | access_token_web=%s",
-            status,
-            has_web_token,
+            "Sessione HTTP Vinted inizializzata | homepage=%s | access_token_web=%s",
+            response.status_code,
+            token_cookie,
         )
-        return page
+    except requests.RequestException as exc:
+        log.warning(
+            "Homepage Vinted non raggiunta durante bootstrap sessione: %s",
+            exc,
+        )
 
-    except PlaywrightTimeoutError:
-        stats["sessione_non_pronta"] += 1
-        log.warning("Timeout bootstrap Vinted.")
-    except Exception as exc:
-        stats["sessione_non_pronta"] += 1
-        log.exception("Errore bootstrap browser Vinted: %s", exc)
+    vinted_session = session
+    vinted_session_created = time.time()
+    return session
 
-    await chiudi_sessione_vinted()
-    return None
+
+def get_vinted_session(force_refresh=False):
+    global vinted_session, vinted_session_created
+
+    with vinted_session_lock:
+        if (
+            force_refresh
+            or vinted_session is None
+            or time.time() - vinted_session_created >= 300
+        ):
+            return _nuova_sessione_http()
+        return vinted_session
+
+
+async def crea_sessione_vinted():
+    """Prepara la sessione HTTP Vinted senza browser."""
+    return await asyncio.to_thread(get_vinted_session)
+
 
 async def chiudi_sessione_vinted():
-    global vinted_playwright, vinted_browser, vinted_context, vinted_page, vinted_request
-    global vinted_browser_ready
-
-    try:
-        if vinted_context is not None:
-            await vinted_context.close()
-    except Exception:
-        pass
-
-    try:
-        if vinted_browser is not None:
-            await vinted_browser.close()
-    except Exception:
-        pass
-
-    try:
-        if vinted_playwright is not None:
-            await vinted_playwright.stop()
-    except Exception:
-        pass
-
-    vinted_playwright = None
-    vinted_browser = None
-    vinted_context = None
-    vinted_page = None
-    vinted_request = None
-    vinted_browser_ready = False
-
-async def _api_catalog_request(query):
-    """Richiesta catalogo attraverso il context browser gia' bootstrapato."""
-    if vinted_request is None:
-        return None, 0
-
-    params = {
-        "search_text": query,
-        "order": "newest_first",
-        "per_page": "40",
-        "page": "1",
-    }
-
-    headers = {
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "it-IT,it;q=0.9,en;q=0.7",
-        "Referer": "https://www.vinted.it/catalog",
-        "User-Agent": USER_AGENT,
-    }
-
-    try:
-        response = await vinted_request.get(
-            "https://www.vinted.it/api/v2/catalog/items",
-            params=params,
-            headers=headers,
-            timeout=15000,
-        )
-        status = response.status
-
-        if status == 200:
-            try:
-                data = await response.json()
-                if isinstance(data, dict):
-                    stats["risposte_catalogo"] += 1
-                    return data, status
-            except Exception:
-                log.warning("Catalogo HTTP 200 ma JSON non valido per '%s'.", query)
-
-        return None, status
-
-    except Exception as exc:
-        log.warning("Errore API catalogo '%s': %s", query, exc)
-        return None, 0
-
-async def _bootstrap_da_catalogo(page, query):
-    """Carica normalmente il catalogo e, se il frontend chiama l'API,
-    cattura direttamente quella risposta del browser.
-    """
-    if page is None or page.is_closed():
-        return None, 0
-
-    encoded = urllib.parse.quote(query)
-    url = (
-        "https://www.vinted.it/catalog"
-        f"?search_text={encoded}&order=newest_first"
-    )
-
-    captured = {"data": None, "status": 0}
-
-    async def on_response(response):
-        if "/api/v2/catalog/items" not in response.url:
-            return
-        captured["status"] = response.status
-        if response.status != 200:
-            return
+    global vinted_session
+    with vinted_session_lock:
         try:
-            payload = await response.json()
-            if isinstance(payload, dict):
-                captured["data"] = payload
+            if vinted_session is not None:
+                vinted_session.close()
         except Exception:
             pass
+        vinted_session = None
 
-    page.on("response", on_response)
-    try:
-        await page.goto(
-            url,
-            wait_until="domcontentloaded",
-            timeout=20000,
-        )
 
-        # Il frontend puo' fare la chiamata catalogo dopo il DOM.
-        for _ in range(8):
-            if captured["data"] is not None or captured["status"] in (401, 403, 429):
-                break
-            await asyncio.sleep(0.4)
-
-        return captured["data"], captured["status"]
-
-    except PlaywrightTimeoutError:
-        return captured["data"], captured["status"]
-    except Exception as exc:
-        log.warning("Bootstrap catalogo fallito per '%s': %s", query, exc)
-        return captured["data"], captured["status"]
-    finally:
-        try:
-            page.remove_listener("response", on_response)
-        except Exception:
-            pass
-
-async def vinted_catalog_browser(page, query):
-    """Recupera il catalogo con sessione web Vinted bootstrapata.
-
-    Strategia:
-      1. API privata con cookie creati dalla normale homepage;
-      2. se 401/403/empty, un caricamento normale della pagina catalogo;
-      3. una sola seconda chiamata API;
-      4. se Vinted continua a bloccare, pausa e nessun bypass.
-    """
+async def vinted_catalog_http(session, query):
+    """Cerca nel catalogo usando la sessione HTTP bootstrapata dalla homepage."""
     global vinted_403_until
 
     if time.time() < vinted_403_until:
         return None
 
-    if vinted_request is None or not vinted_browser_ready:
-        page = await crea_sessione_vinted()
-        if page is None:
+    params = {
+        "search_text": query,
+        "order": "newest_first",
+        "per_page": 20,
+        "page": 1,
+    }
+
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Referer": "https://www.vinted.it/",
+    }
+
+    for tentativo in range(2):
+        try:
+            response = await asyncio.to_thread(
+                session.get,
+                "https://www.vinted.it/api/v2/catalog/items",
+                params=params,
+                headers=headers,
+                timeout=15,
+            )
+        except requests.RequestException as exc:
+            stats["errori_http"] += 1
+            log.warning(
+                "Errore HTTP Vinted per '%s': %s",
+                query,
+                exc,
+            )
             return None
 
-    data, status = await _api_catalog_request(query)
+        if response.status_code == 200:
+            try:
+                data = response.json()
+            except ValueError:
+                stats["errori_http"] += 1
+                log.warning(
+                    "Risposta non JSON per '%s': %s",
+                    query,
+                    response.text[:160].replace("\\n", " "),
+                )
+                return None
 
-    if data is not None:
-        items = data.get("items", [])
-        stats["items_ricevuti"] += len(items) if isinstance(items, list) else 0
-        return data
+            if isinstance(data, dict):
+                return data
+            return None
 
-    # Una sola riparazione normale della sessione.
-    if status in (401, 403) or status == 0:
-        browser_data, browser_status = await _bootstrap_da_catalogo(page, query)
+        if response.status_code == 401 and tentativo == 0:
+            log.warning(
+                "Vinted HTTP 401 per '%s': rinnovo normale della sessione.",
+                query,
+            )
+            session = await asyncio.to_thread(
+                get_vinted_session,
+                True,
+            )
+            continue
 
-        if browser_data is not None:
-            items = browser_data.get("items", [])
-            stats["risposte_catalogo"] += 1
-            stats["items_ricevuti"] += len(items) if isinstance(items, list) else 0
-            return browser_data
+        if response.status_code == 403:
+            stats["http_403"] += 1
+            vinted_403_until = time.time() + VINTED_403_COOLDOWN
+            log.error(
+                "Vinted HTTP 403 per '%s': pausa %ss; nessun bypass.",
+                query,
+                VINTED_403_COOLDOWN,
+            )
+            return None
 
-        data, retry_status = await _api_catalog_request(query)
-        status = retry_status or browser_status or status
+        if response.status_code == 429:
+            stats["rate_limit"] += 1
+            retry_after = response.headers.get("Retry-After")
+            try:
+                delay = min(max(float(retry_after), 2.0), 30.0)
+            except (TypeError, ValueError):
+                delay = 5.0
+            log.warning(
+                "Vinted HTTP 429 per '%s': attendo %.1fs.",
+                query,
+                delay,
+            )
+            await asyncio.sleep(delay)
+            return None
 
-        if data is not None:
-            items = data.get("items", [])
-            stats["items_ricevuti"] += len(items) if isinstance(items, list) else 0
-            return data
-
-    if status == 401:
-        stats["http_401"] += 1
-        log.warning("Vinted HTTP 401 dopo bootstrap per '%s'.", query)
-    elif status == 403:
-        stats["http_403"] += 1
-        vinted_403_until = time.time() + VINTED_403_COOLDOWN
-        log.warning(
-            "Vinted HTTP 403: pausa %ss; nessun bypass.",
-            VINTED_403_COOLDOWN,
-        )
-    elif status == 429:
-        stats["rate_limit"] += 1
-        log.warning("Vinted HTTP 429 per '%s'.", query)
-    elif status >= 500:
-        stats["http_5xx"] += 1
-        log.warning("Vinted HTTP %s per '%s'.", status, query)
-    else:
         stats["errori_http"] += 1
-        log.warning("Vinted HTTP %s per '%s'.", status or "nessuna risposta", query)
+        log.warning(
+            "HTTP %s su Vinted per query '%s'.",
+            response.status_code,
+            query,
+        )
+        return None
 
     return None
 
+# ================================================================
 # QUERY / SCHEDULER
 # ================================================================
 
@@ -1838,13 +1677,13 @@ async def invia_notifica(res):
 # ================================================================
 
 async def scansione_query(
-    page,
+    session,
     query,
 ):
     global ultimo_affare
     global nuovi_dal_salvataggio
 
-    data = await vinted_catalog_browser(page, query)
+    data = await vinted_catalog_http(session, query)
 
     if data is None:
         return
@@ -1943,7 +1782,7 @@ async def controllo_vinted():
         return
 
     async with scanner_lock:
-        page = await crea_sessione_vinted()
+        session = await crea_sessione_vinted()
         now = time.time()
 
         secondarie_due = [
@@ -1973,7 +1812,7 @@ async def controllo_vinted():
         for query in queries:
             try:
                 await scansione_query(
-                    page,
+                    session,
                     query,
                 )
             except Exception as exc:
@@ -2069,10 +1908,6 @@ async def report_loop():
                 f"Rate limit: {stats['rate_limit']}\n"
                 f"403: {stats['http_403']}\n"
                 f"Errori HTTP: {stats['errori_http']}\n"
-                f"401: {stats['http_401']} | 5xx: {stats['http_5xx']}\n"
-                f"Risposte catalogo: {stats['risposte_catalogo']}\n"
-                f"Item ricevuti: {stats['items_ricevuti']}\n"
-                f"Sessioni non pronte: {stats['sessione_non_pronta']}\n"
                 f"Notifiche fallite: {stats['notifiche_fallite']}\n"
                 f"Notificati totali: {len(gia_visti)}"
             )
@@ -2138,8 +1973,7 @@ async def cmd_stats(ctx):
         f"{s['freshness_sconosciuto']} | "
         f"Freshness scaduta: {s['freshness_no']}\n"
         f"Rate limit: {s['rate_limit']} | "
-        f"401: {s['http_401']} | 403: {s['http_403']} | 5xx: {s['http_5xx']}\n"
-        f"Risposte catalogo: {s['risposte_catalogo']} | Item ricevuti: {s['items_ricevuti']}\n"
+        f"403: {s['http_403']}\n"
         f"Visti/notificati: {len(gia_visti)}"
     )
 
@@ -2374,10 +2208,7 @@ async def on_ready():
     if scanner_lock is None:
         scanner_lock = asyncio.Lock()
 
-    page = await crea_sessione_vinted()
-
-    if page is None:
-        log.warning("Sessione Vinted non pronta: lo scanner riprovera\u00e0 automaticamente.")
+    await crea_sessione_vinted()
 
     if (
         scanner_task is None
@@ -2408,7 +2239,7 @@ app = Flask(__name__)
 @app.route("/")
 def home():
     return (
-        "Vinted Resell Bot V5.3 Browser online",
+        "Vinted Resell Bot V5.3 HTTP online",
         200,
     )
 
@@ -2439,8 +2270,6 @@ def avvia_flask():
         app.run(
             host="0.0.0.0",
             port=port,
-            threaded=True,
-            use_reloader=False,
         )
 
     except Exception as exc:
@@ -2468,7 +2297,7 @@ def main():
     ).start()
 
     log.info(
-        "Avvio Vinted Resell Bot V5.3 Browser..."
+        "Avvio Vinted Resell Bot V5.3 HTTP..."
     )
 
     bot.run(TOKEN)
