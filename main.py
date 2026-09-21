@@ -13,12 +13,11 @@
 #   TRADE_FACTOR (default 0.95)
 #   DISCORD_PING_MODE (none/here/everyone, default none)
 #   APIFY_API_TOKEN (required on Render)
-#   APIFY_ACTOR_ID (default crawloop/vinted-monitor)
+#   APIFY_ACTOR_ID (default scrape.badger/vinted-scraper)
 #   APIFY_DOMAIN (default it)
-#   APIFY_MAX_ITEMS (default 150)
+#   APIFY_RESULTS_PER_RUN (default 20)
+#   APIFY_QUERY_GROUPS_PER_SCAN (default 1)
 #   APIFY_SCAN_INTERVAL (default 300 sec)
-#   APIFY_MONITOR_MODE (default true)
-#   APIFY_EMIT_EXISTING (default false)
 #   APIFY_MAX_PRICE (default 80; il codice alza automaticamente il tetto se serve)
 #
 # IMPORTANTE:
@@ -76,17 +75,15 @@ def env_int(name, default, minimum):
 # Apify = solo trasporto dati. Il bot continua a gestire filtri, scoring,
 # blacklist e notifiche. Il token va SOLO nelle Environment Variables di Render.
 APIFY_API_TOKEN = os.getenv("APIFY_API_TOKEN", "").strip()
-APIFY_ACTOR_ID = os.getenv("APIFY_ACTOR_ID", "crawloop/vinted-monitor").strip()
+APIFY_ACTOR_ID = os.getenv("APIFY_ACTOR_ID", "scrape.badger/vinted-scraper").strip()
 APIFY_DOMAIN = os.getenv("APIFY_DOMAIN", "it").strip().lower() or "it"
-APIFY_MAX_ITEMS = env_int("APIFY_MAX_ITEMS", 150, 1)
 APIFY_TIMEOUT_SECONDS = env_int("APIFY_TIMEOUT_SECONDS", 240, 30)
 APIFY_SCAN_INTERVAL = env_int("APIFY_SCAN_INTERVAL", 300, 60)
-APIFY_MONITOR_MODE = os.getenv("APIFY_MONITOR_MODE", "true").strip().lower() == "true"
-APIFY_EMIT_EXISTING = os.getenv("APIFY_EMIT_EXISTING", "false").strip().lower() == "true"
 APIFY_MAX_PRICE = env_int("APIFY_MAX_PRICE", 80, 1)
 
 SCAN_INTERVAL = env_int("SCAN_INTERVAL", APIFY_SCAN_INTERVAL, 60)
 FRESHNESS_SECONDS = min(env_int("FRESHNESS_SECONDS", 180, 30), 180)
+FRESHNESS_REQUIRE_TIMESTAMP = os.getenv("FRESHNESS_REQUIRE_TIMESTAMP", "false").strip().lower() == "true"
 
 try:
     TRADE_FACTOR = float(os.getenv("TRADE_FACTOR", "0.95"))
@@ -978,18 +975,24 @@ def valuta_item(item):
         stats["modello_no"] += 1
         return None
 
-    # 5) Freshness rigorosa 0-180 sec (config runtime)
+    # 5) Freshness
+    # Questo Actor ordina i risultati con newest_first ma il suo output
+    # tabellare verificato non espone un timestamp Vinted dell'annuncio.
+    # Se un timestamp esiste, lo usiamo rigorosamente. Altrimenti, in modalita
+    # relativa, il filtro temporale viene sostituito dal dedup tra sweep.
     freshness = freshness_item(item)
 
-    if freshness is None:
-        # Regola rigida: isNew di Apify NON e' un timestamp di creazione Vinted.
-        # Se createdAt/listedAt non e' disponibile o non e' valido, scartiamo.
+    if freshness is not None:
+        if freshness > cfg_runtime["max_secondi_freschezza"]:
+            stats["freshness_no"] += 1
+            return None
+    elif FRESHNESS_REQUIRE_TIMESTAMP:
         stats["freshness_sconosciuto"] += 1
         return None
-
-    if freshness > cfg_runtime["max_secondi_freschezza"]:
-        stats["freshness_no"] += 1
-        return None
+    else:
+        # Questo Actor non espone un timestamp Vinted affidabile nel dataset
+        # osservato. Non inventiamo un'eta': usiamo newest_first + dedup per ID.
+        freshness = 0.0
 
     # 6) Stile
     if ha_pattern_stile(
@@ -1315,7 +1318,15 @@ def is_blacklisted(iid):
 
 apify_403_until = 0.0
 
+# Actor verificato: scrape.badger/vinted-scraper
+# Endpoint ufficiale: run-sync-get-dataset-items
+APIFY_ACTOR_ID = os.getenv("APIFY_ACTOR_ID", "scrape.badger/vinted-scraper").strip()
 APIFY_API_URL = "https://api.apify.com/v2/acts/{actor}/run-sync-get-dataset-items"
+
+# Questo Actor usa Search Items con UNA query per run.
+# Per contenere i costi, il bot raggruppa i modelli per brand e ruota i gruppi.
+APIFY_RESULTS_PER_RUN = env_int("APIFY_RESULTS_PER_RUN", 20, 1)
+APIFY_QUERY_GROUPS_PER_SCAN = env_int("APIFY_QUERY_GROUPS_PER_SCAN", 1, 1)
 
 
 def _parse_iso_timestamp(raw):
@@ -1341,48 +1352,60 @@ def _parse_iso_timestamp(raw):
         return None
 
 
+def slug_vinted(testo):
+    testo = normalizza(testo)
+    testo = re.sub(r"[^a-z0-9]+", "-", testo).strip("-")
+    return testo[:110]
+
+
 def normalizza_item_apify(row):
-    """Adatta i record Apify al formato interno del vecchio bot."""
+    """Adatta l'output reale di scrape.badger al formato interno."""
     if not isinstance(row, dict):
         return None
 
-    # Crawler/monitor actors possono usare nomi diversi.
-    iid = row.get("itemId") or row.get("id") or row.get("productId")
-    title = row.get("title") or row.get("display_title") or ""
-    url = row.get("url") or row.get("itemUrl") or row.get("canonicalUrl") or ""
-    brand = row.get("brand") or row.get("brandTitle") or row.get("brand_title") or ""
-    size = row.get("size") or row.get("sizeTitle") or row.get("size_title") or ""
-    condition = row.get("condition") or row.get("status") or ""
+    # Campi osservati nell'output dell'Actor:
+    # brand_title, display_title, id, market, photo_url,
+    # price_amount, price_currency, seller_id, seller_login, size, status...
+    iid = row.get("id") or row.get("item_id") or row.get("itemId")
+    title = row.get("display_title") or row.get("title") or ""
+    url = row.get("url") or row.get("item_url") or row.get("itemUrl") or ""
+    brand = row.get("brand_title") or row.get("brand") or row.get("brandTitle") or ""
+    size = row.get("size") or row.get("size_title") or row.get("sizeTitle") or ""
+    condition = row.get("status") or row.get("condition") or ""
     description = row.get("description") or ""
 
-    price = row.get("price")
-    if isinstance(price, dict):
-        price = price.get("amount")
+    price = row.get("price_amount")
     if price is None:
         price = row.get("priceAmount")
     if price is None:
-        price = row.get("price_amount")
+        price = row.get("price")
+    if isinstance(price, dict):
+        price = price.get("amount")
 
-    photos = row.get("photos") or []
-    if not isinstance(photos, list):
-        photos = []
-    photo_url = row.get("photoUrl") or row.get("imageUrl") or row.get("photo_url") or ""
-    if not photo_url and photos:
-        photo_url = str(photos[0] or "")
+    photo_url = (
+        row.get("photo_url")
+        or row.get("photoUrl")
+        or row.get("image_url")
+        or row.get("imageUrl")
+        or ""
+    )
 
+    # Seller fields disponibili nel risultato tabellare dell'Actor.
     seller = {
-        "feedback_count": row.get("sellerFeedbackCount"),
-        "feedback_reputation": row.get("sellerFeedbackReputation") or row.get("sellerRating"),
-        "item_count": row.get("sellerItemCount"),
+        "feedback_count": row.get("seller_feedback_count") or row.get("sellerFeedbackCount"),
+        "feedback_reputation": row.get("seller_feedback_reputation") or row.get("sellerRating"),
+        "item_count": row.get("seller_item_count") or row.get("sellerItemCount"),
     }
 
+    # Alcune versioni/risultati possono avere un timestamp; se non c'e',
+    # non lo inventiamo.
     created = (
-        row.get("createdAt")
+        row.get("created_at")
+        or row.get("createdAt")
+        or row.get("listed_at")
         or row.get("listedAt")
-        or row.get("created_at")
         or row.get("created_at_ts")
     )
-    is_new = bool(row.get("isNew", False))
 
     normalized = {
         "id": str(iid or "").strip(),
@@ -1394,41 +1417,80 @@ def normalizza_item_apify(row):
         "price": {"amount": price},
         "photo": {"url": str(photo_url or "")},
         "user": seller,
+        "seller_login": str(row.get("seller_login") or ""),
+        "seller_id": str(row.get("seller_id") or ""),
         "url": str(url or ""),
         "created_at": created,
         "created_at_ts": _parse_iso_timestamp(created),
-        "_apify_is_new": is_new,
-        "_apify_scraped_at": row.get("scrapedAt"),
+        "market": str(row.get("market") or APIFY_DOMAIN),
+        "currency": str(row.get("price_currency") or "EUR"),
+        "service_fee": row.get("service_fee"),
     }
 
     if not normalized["url"] and normalized["id"]:
-        normalized["url"] = f"https://www.vinted.it/items/{normalized['id']}"
+        slug = slug_vinted(normalized["title"])
+        normalized["url"] = (
+            f"https://www.vinted.{APIFY_DOMAIN}/items/"
+            f"{normalized['id']}-{slug}"
+            if slug else
+            f"https://www.vinted.{APIFY_DOMAIN}/items/{normalized['id']}"
+        )
 
     return normalized
 
 
 async def chiudi_sessione_vinted():
-    """Compatibilita' con l'architettura precedente: non c'e' sessione locale da chiudere."""
     return None
 
 
 async def crea_sessione_vinted():
-    """Verifica solo la configurazione Apify; il collector e' remoto."""
     if not APIFY_API_TOKEN:
         log.error("Manca APIFY_API_TOKEN nelle Environment Variables di Render.")
         return False
     log.info(
-        "Collector Apify pronto | actor=%s | market=%s | max_items=%s | monitor=%s",
+        "Collector Apify pronto | actor=%s | market=%s | results/run=%s",
         APIFY_ACTOR_ID,
         APIFY_DOMAIN,
-        APIFY_MAX_ITEMS,
-        APIFY_MONITOR_MODE,
+        APIFY_RESULTS_PER_RUN,
     )
     return True
 
 
-async def apify_catalog(query_list):
-    """Esegue una sola run Apify per piu' query Vinted."""
+# Query mirate: ogni run cerca un modello preciso.
+# Il cursore ruota i 12 modelli senza dover creare 12 Actor separati.
+# Il filtro/scoring finale resta sempre nel bot.
+QUERY_GROUPS = [
+    ["the north face nuptse"],
+    ["carhartt wip detroit jacket"],
+    ["the north face denali"],
+    ["patagonia synchilla"],
+    ["patagonia retro x"],
+    ["patagonia better sweater"],
+    ["patagonia torrentshell"],
+    ["barbour bedale"],
+    ["barbour beaufort"],
+    ["woolrich arctic parka"],
+    ["timberland premium 6 inch wheat"],
+    ["ugg ultra mini"],
+]
+
+query_group_cursor = 0
+
+
+def gruppi_da_scansionare():
+    global query_group_cursor
+    if not QUERY_GROUPS:
+        return []
+
+    scelti = []
+    for _ in range(min(APIFY_QUERY_GROUPS_PER_SCAN, len(QUERY_GROUPS))):
+        scelti.append(QUERY_GROUPS[query_group_cursor % len(QUERY_GROUPS)])
+        query_group_cursor = (query_group_cursor + 1) % len(QUERY_GROUPS)
+    return scelti
+
+
+async def apify_search(query, max_results=None):
+    """Una ricerca Search Items compatibile con l'Actor reale."""
     global apify_403_until
 
     if not APIFY_API_TOKEN:
@@ -1438,13 +1500,9 @@ async def apify_catalog(query_list):
     if time.time() < apify_403_until:
         return None
 
-    queries = [q for q in query_list if q]
-    if not queries:
-        return []
+    max_results = max_results or APIFY_RESULTS_PER_RUN
 
-    # Il collector deve coprire sempre il buy-max piu' alto dei modelli.
-    # +10 EUR lascia margine per future modifiche ai modelli; il filtro
-    # definitivo resta comunque buy_max dentro valuta_item().
+    # Prezzo massimo realmente necessario: il filtro definitivo resta nel bot.
     buy_ceiling = max(
         safe_float(block.get("buy_max"))
         for modello in MODELLI
@@ -1454,30 +1512,30 @@ async def apify_catalog(query_list):
     collector_max_price = max(APIFY_MAX_PRICE, buy_ceiling + 10)
 
     payload = {
-        "searchTerms": queries,
-        "domain": APIFY_DOMAIN,
-        "maxItems": APIFY_MAX_ITEMS,
+        "mode": "Search Items",
+        "query": query,
+        "market": APIFY_DOMAIN,
+        "price_to": str(collector_max_price),
         "order": "newest_first",
-        "maxPrice": collector_max_price,
-        "monitorMode": APIFY_MONITOR_MODE,
-        "emitExisting": APIFY_EMIT_EXISTING,
-        "checkInterval": 0,
+        "max_results": max_results,
     }
 
     url = APIFY_API_URL.format(
         actor=urllib.parse.quote(APIFY_ACTOR_ID.replace("/", "~"), safe="~")
     )
+
     headers = {
         "Authorization": f"Bearer {APIFY_API_TOKEN}",
         "Content-Type": "application/json",
         "Accept": "application/json",
-        "User-Agent": "VintedResellBot/Final-2026",
+        "User-Agent": "VintedResellBot/2026",
     }
 
     try:
         response = await asyncio.to_thread(
             requests.post,
             url,
+            params={"token": APIFY_API_TOKEN},
             json=payload,
             headers=headers,
             timeout=APIFY_TIMEOUT_SECONDS,
@@ -1498,26 +1556,19 @@ async def apify_catalog(query_list):
         if isinstance(data, list):
             return data
         if isinstance(data, dict):
+            # Alcune risposte wrapper possono contenere items.
             return data.get("items", [])
         return []
 
     if response.status_code in (401, 403):
         stats["http_403"] += 1
         apify_403_until = time.time() + 300
-        log.error(
-            "Apify HTTP %s: controlla APIFY_API_TOKEN e permessi. Pausa 300s.",
-            response.status_code,
-        )
+        log.error("Apify HTTP %s: token/permessi da controllare. Pausa 300s.", response.status_code)
         return None
 
     if response.status_code == 402:
         stats["errori_http"] += 1
-        log.error("Apify HTTP 402: credito/limite di utilizzo insufficiente.")
-        return None
-
-    if response.status_code == 408:
-        stats["errori_http"] += 1
-        log.warning("Apify timeout HTTP 408: run troppo lunga.")
+        log.error("Apify HTTP 402: credito/limite insufficiente.")
         return None
 
     if response.status_code == 429:
@@ -1529,33 +1580,40 @@ async def apify_catalog(query_list):
     log.warning(
         "Apify HTTP %s: %s",
         response.status_code,
-        response.text[:250].replace("\n", " "),
+        response.text[:300].replace("\n", " "),
     )
     return None
+
+
+async def apify_catalog(query_groups):
+    """Esegue le ricerche necessarie e unisce i risultati senza duplicati."""
+    merged = []
+    seen = set()
+
+    for group in query_groups:
+        for query in group:
+            data = await apify_search(query)
+            if data is None:
+                continue
+            for row in data:
+                iid = str((row or {}).get("id") or (row or {}).get("item_id") or "").strip()
+                key = iid or str(row)
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(row)
+
+    return merged
 
 # ================================================================
 # QUERY / SCHEDULER
 # ================================================================
 
-QUERY_FISSE = [
-    "the north face 1996 retro nuptse",
-    "carhartt wip detroit jacket",
-    "the north face denali fleece",
-    "patagonia synchilla",
-    "patagonia retro x",
-    "patagonia better sweater",
-    "patagonia torrentshell",
-    "barbour bedale",
-    "barbour beaufort",
-    "woolrich arctic parka",
-    "timberland premium 6 inch wheat",
-    "ugg ultra mini",
-]
+# Manteniamo i modelli e le query nel codice: l'Actor non va configurato
+# manualmente 12 volte. L'Actor riceve una query per run.
+QUERY_FISSE = [q[0] for q in QUERY_GROUPS]
 
-QUERY_SECONDARIE = []
-
-# Un solo sweep remoto: niente 10 Actor separati.
-QUERY_APIFY = list(dict.fromkeys(QUERY_FISSE + QUERY_SECONDARIE))
+QUERY_APIFY = QUERY_FISSE
 
 nuovi_dal_salvataggio = 0
 cicli_dal_salvataggio = 0
@@ -1757,17 +1815,16 @@ async def controllo_vinted():
         if not await crea_sessione_vinted():
             return
 
+        gruppi = gruppi_da_scansionare()
         log.info(
-            "Nuovo sweep Apify | %s query | max_items=%s",
-            len(QUERY_APIFY),
-            APIFY_MAX_ITEMS,
+            "Nuovo sweep Apify | gruppi=%s | results/run=%s | query=%s",
+            len(gruppi),
+            APIFY_RESULTS_PER_RUN,
+            [q for g in gruppi for q in g],
         )
 
-        data = await apify_catalog(QUERY_APIFY)
-        if data is None:
-            return
-
-        if not isinstance(data, list):
+        data = await apify_catalog(gruppi)
+        if not data:
             return
 
         await scansione_items(data)
@@ -1920,8 +1977,9 @@ async def config(ctx):
         f"freshness massima = 180 sec\n"
         f"ping = {PING_MODE}\n"
         f"Apify actor = {APIFY_ACTOR_ID}\n"
-        f"Apify max items = {APIFY_MAX_ITEMS}\n"
-        f"Apify monitor = {APIFY_MONITOR_MODE}\n"
+        f"Apify results/run = {APIFY_RESULTS_PER_RUN}\n"
+        f"Apify groups/scan = {APIFY_QUERY_GROUPS_PER_SCAN}\n"
+        f"Timestamp obbligatorio = {FRESHNESS_REQUIRE_TIMESTAMP}\n"
         f"seller costi = {SELLER_COST_RATE:.2%} + {SELLER_FIXED_COST:.2f} EUR\n"
         f"database = {STATE_DB_PATH}\n"
         f"blacklist ID = {len(blacklist_ids)}\n"
