@@ -1,5 +1,5 @@
-# BOT VINTED RESELL — FINAL HTTP 2026
-# Basato sulla logica del vecchio bot funzionante, con i 10 modelli strategici attuali.
+# BOT VINTED RESELL — FINAL APIFY MONITOR 2026
+# Basato sulla logica del vecchio bot funzionante, con 12 modelli strategici precisi.
 # WINTER STRATEGY: selected models, controlled buy ceilings, low fake/capital risk.
 # NO luxury/high-counterfeit targets; no auto-purchase is performed by the bot.
 # Scanner Discord + filtri + scoring + notifiche.
@@ -8,11 +8,18 @@
 # ENV:
 #   DISCORD_TOKEN
 #   DISCORD_CHANNEL_ID (opzionale)
-#   SCAN_INTERVAL (default 10, minimo 8)
+#   SCAN_INTERVAL (default 300, minimo 60)
 #   FRESHNESS_SECONDS (default 180, minimo 30)
 #   TRADE_FACTOR (default 0.95)
 #   DISCORD_PING_MODE (none/here/everyone, default none)
-#   VINTED_403_COOLDOWN_SECONDS (default 300)
+#   APIFY_API_TOKEN (required on Render)
+#   APIFY_ACTOR_ID (default crawloop/vinted-monitor)
+#   APIFY_DOMAIN (default it)
+#   APIFY_MAX_ITEMS (default 150)
+#   APIFY_SCAN_INTERVAL (default 300 sec)
+#   APIFY_MONITOR_MODE (default true)
+#   APIFY_EMIT_EXISTING (default false)
+#   APIFY_MAX_PRICE (default 80; il codice alza automaticamente il tetto se serve)
 #
 # IMPORTANTE:
 # - freshness usa SOLO il timestamp dell'annuncio, mai quello della foto.
@@ -29,6 +36,7 @@ import os
 import re
 import time
 import unicodedata
+import urllib.parse
 from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
@@ -65,7 +73,19 @@ def env_int(name, default, minimum):
     except ValueError:
         return default
 
-SCAN_INTERVAL = env_int("SCAN_INTERVAL", 10, 8)
+# Apify = solo trasporto dati. Il bot continua a gestire filtri, scoring,
+# blacklist e notifiche. Il token va SOLO nelle Environment Variables di Render.
+APIFY_API_TOKEN = os.getenv("APIFY_API_TOKEN", "").strip()
+APIFY_ACTOR_ID = os.getenv("APIFY_ACTOR_ID", "crawloop/vinted-monitor").strip()
+APIFY_DOMAIN = os.getenv("APIFY_DOMAIN", "it").strip().lower() or "it"
+APIFY_MAX_ITEMS = env_int("APIFY_MAX_ITEMS", 150, 1)
+APIFY_TIMEOUT_SECONDS = env_int("APIFY_TIMEOUT_SECONDS", 240, 30)
+APIFY_SCAN_INTERVAL = env_int("APIFY_SCAN_INTERVAL", 300, 60)
+APIFY_MONITOR_MODE = os.getenv("APIFY_MONITOR_MODE", "true").strip().lower() == "true"
+APIFY_EMIT_EXISTING = os.getenv("APIFY_EMIT_EXISTING", "false").strip().lower() == "true"
+APIFY_MAX_PRICE = env_int("APIFY_MAX_PRICE", 80, 1)
+
+SCAN_INTERVAL = env_int("SCAN_INTERVAL", APIFY_SCAN_INTERVAL, 60)
 FRESHNESS_SECONDS = min(env_int("FRESHNESS_SECONDS", 180, 30), 180)
 
 try:
@@ -214,9 +234,6 @@ BRAND_ALIASES = {
     "timberland": ["timberland", "timberlands"],
     "ralph lauren": [
         "ralph lauren", "polo ralph lauren", "raulph lauren", "ralf lauren"
-    ],
-    "stone island": [
-        "stone island", "stoneisland", "ston island", "stone islan"
     ],
     "stussy": ["stussy"],
     "new balance": ["new balance", "newbalance"],
@@ -398,17 +415,21 @@ def is_bambino(testo, taglia):
 CONDIZIONI_API_MAP = {
     "nuovo con etichette": "nuovo con cartellino",
     "new_with_tags": "nuovo con cartellino",
+    "new with tags": "nuovo con cartellino",
     "nuovo senza etichette": "nuovo senza cartellino",
     "new_without_tags": "nuovo senza cartellino",
+    "new without tags": "nuovo senza cartellino",
     "nuovo": "nuovo",
     "new": "nuovo",
     "ottime": "ottime",
     "very_good": "ottime",
+    "very good": "ottime",
     "molto buono": "molto buono",
     "buone": "buone",
     "good": "buone",
     "discrete": "discrete",
     "satisfactory": "discrete",
+    "satisfactory condition": "discrete",
     "sufficiente": "sufficiente",
 }
 
@@ -434,12 +455,16 @@ TAGLIE_RIFIUTA_GLOBALE = ["XXS"]
 BUONE_AMMESSE = {
     "tnf_nuptse",
     "carhartt_detroit",
-    "timberland_wheat",
     "tnf_denali",
-    "barbour_bedale_beaufort",
+    "barbour_bedale",
+    "barbour_beaufort",
     "woolrich_arctic",
-    "patagonia_down_sweater",
-    "patagonia_nano_puff",
+    "patagonia_retrox",
+    "patagonia_synchilla",
+    "patagonia_better_sweater",
+    "patagonia_torrentshell",
+    "timberland_wheat",
+    "ugg_ultramini",
 }
 
 DISCRETE_AMMESSE = {
@@ -492,7 +517,6 @@ def colore_ok(model_id, testo, keyword_matchata):
 
 SELLER_RISCHIO_BRANDS = [
     "arc'teryx",
-    "stone island",
     "the north face",
     "carhartt wip",
     "stussy",
@@ -500,17 +524,6 @@ SELLER_RISCHIO_BRANDS = [
     "ugg",
     "new balance",
 ]
-
-AUTH_RISK_BRANDS = {
-    "the north face",
-    "arc'teryx",
-    "stone island",
-    "carhartt wip",
-    "stussy",
-    "nike",
-    "ugg",
-    "new balance",
-}
 
 # Brand che escludiamo esplicitamente dalla strategia low-capital:
 # troppo capitale e/o rischio contraffazione per il margine cercato.
@@ -533,29 +546,14 @@ def seller_rischioso(item):
     fb = safe_int(user.get("feedback_count"), 0)
     items = safe_int(user.get("item_count"), 0)
     rep = safe_float(user.get("feedback_reputation"), 1.0)
+    if rep > 1.0:
+        rep = rep / 5.0
 
     return (
         (fb == 0 and items < 5)
         or
         (fb < 3 and rep < 0.8 and items < 10)
     )
-
-# ================================================================
-# STONE ISLAND / CERTILOGO
-# ================================================================
-
-def evidenza_certilogo(descrizione):
-    """Richiede un codice CLG/Certilogo plausibile di 12 cifre."""
-    d = normalizza(descrizione)
-    compact12 = r"(?:\d[\s\-]?){12}"
-    return bool(
-        re.search(r"\bclg\s*[:#\-]?\s*" + compact12 + r"\b", d, re.I)
-        or re.search(r"\bcertilogo\b.{0,30}\b" + compact12 + r"\b", d, re.I)
-        or re.search(r"\b" + compact12 + r"\b.{0,30}\bcertilogo\b", d, re.I)
-    )
-
-def authenticity_warning(brand, descrizione):
-    return brand == "stone island" and not evidenza_certilogo(descrizione)
 
 # ================================================================
 # MODELLI
@@ -588,158 +586,111 @@ def M(
     }
 
 
-# Strategia low-capital: pochi modelli, margine realistico,
+# Strategia low-capital: 12 modelli precisi, margine realistico,
 # rotazione abbastanza veloce e rischio contraffazione contenuto.
 MODELLI = [
     M(
         "tnf_nuptse", "the north face", "1996/1990 Retro Nuptse",
-        "the north face nuptse",
-        [
-            "1996 retro nuptse", "nuptse 1996", "1996 nuptse",
-            "1990 retro nuptse", "nuptse 1990", "retro nuptse",
-            "nuptse 700", "700 nuptse", "nupste", "nuptze",
-        ],
-        {
-            "ottime": {"auto_buy": 20, "buy_max": 30},
-            "buone": {"buy_max": 30},
-            "nuovo senza cartellino": {"buy_max": 40},
-            "nuovo con cartellino": {"buy_max": 40},
-        },
-        90, 120, 30,
-        taglie_rifiuta=["XS"],
+        "the north face 1996 retro nuptse",
+        ["1996 retro nuptse", "nuptse 1996", "1990 retro nuptse", "nuptse 1990", "retro nuptse", "nuptse 700", "700 nuptse"],
+        {"ottime": {"auto_buy": 20, "buy_max": 30}, "buone": {"buy_max": 30}, "nuovo senza cartellino": {"buy_max": 40}, "nuovo con cartellino": {"buy_max": 40}},
+        90, 120, 30, taglie_rifiuta=["XS"],
         escludi_se=["baltoro", "gilet", "vest", "smanicato", "chaleco", "sin mangas"],
     ),
     M(
-        "carhartt_detroit", "carhartt wip", "Detroit/Michigan/Active Jacket",
-        "carhartt detroit jacket",
-        [
-            "og detroit", "detroit jacket", "michigan coat", "active jacket",
-            "carhartt wip detroit", "carhartt detroit", "hamilton brown", "detroit brown",
-        ],
-        {
-            "ottime": {"auto_buy": 30, "buy_max": 40},
-            "buone": {"auto_buy": 25, "buy_max": 35},
-            "nuovo senza cartellino": {"buy_max": 45},
-            "nuovo con cartellino": {"buy_max": 60},
-        },
-        70, 110, 30,
-        taglie_rifiuta=["XS"],
+        "carhartt_detroit", "carhartt wip", "Detroit Jacket",
+        "carhartt wip detroit jacket",
+        ["detroit jacket", "og detroit", "carhartt detroit", "detroit brown", "hamilton brown"],
+        {"ottime": {"auto_buy": 30, "buy_max": 40}, "buone": {"auto_buy": 25, "buy_max": 35}, "nuovo senza cartellino": {"buy_max": 45}, "nuovo con cartellino": {"buy_max": 60}},
+        70, 110, 30, taglie_rifiuta=["XS"],
+        escludi_se=["michigan", "active jacket", "og active"],
     ),
     M(
         "tnf_denali", "the north face", "Denali Fleece",
-        "the north face denali",
+        "the north face denali fleece",
         ["denali fleece", "denali jacket", "tnf denali", "north face denali"],
-        {
-            "ottime": {"auto_buy": 15, "buy_max": 25},
-            "buone": {"buy_max": 20},
-            "nuovo senza cartellino": {"buy_max": 30},
-            "nuovo con cartellino": {"buy_max": 40},
-        },
-        45, 70, 20,
-        taglie_rifiuta=["XS", "XXS"],
+        {"ottime": {"auto_buy": 15, "buy_max": 25}, "buone": {"buy_max": 20}, "nuovo senza cartellino": {"buy_max": 30}, "nuovo con cartellino": {"buy_max": 40}},
+        45, 70, 20, taglie_rifiuta=["XS", "XXS"],
         escludi_se=["gilet", "vest", "smanicato"],
     ),
     M(
-        "barbour_bedale", "barbour", "Bedale/Beaufort",
-        "barbour bedale beaufort",
-        ["bedale", "beaufort", "barbour bedale", "barbour beaufort", "barbour border"],
-        {
-            "ottime": {"auto_buy": 25, "buy_max": 40},
-            "buone": {"auto_buy": 20, "buy_max": 35},
-            "nuovo senza cartellino": {"buy_max": 55},
-            "nuovo con cartellino": {"buy_max": 70},
-        },
-        80, 120, 30,
-        taglie_rifiuta=["XS"],
-        escludi_se=["bambino", "kids", "gilet", "vest", "smanicato"],
+        "patagonia_synchilla", "patagonia", "Synchilla",
+        "patagonia synchilla",
+        ["synchilla", "synchilla fleece", "synchilla snap-t", "synchilla snap t"],
+        {"ottime": {"auto_buy": 18, "buy_max": 25}, "buone": {"buy_max": 22}, "nuovo senza cartellino": {"buy_max": 32}, "nuovo con cartellino": {"buy_max": 35}},
+        45, 65, 20,
+        escludi_se=["gilet", "vest", "smanicato", "kids", "bambino"],
     ),
     M(
         "patagonia_retrox", "patagonia", "Retro-X",
         "patagonia retro x",
-        ["retro-x", "retro x", "classic retro-x"],
-        {
-            "ottime": {"auto_buy": 20, "buy_max": 30},
-            "buone": {"buy_max": 25},
-            "nuovo con cartellino": {"buy_max": 40},
-            "nuovo senza cartellino": {"buy_max": 40},
-        },
-        65, 100, 25,
+        ["retro-x", "retro x", "classic retro-x", "classic retro x"],
+        {"ottime": {"auto_buy": 25, "buy_max": 35}, "buone": {"buy_max": 30}, "nuovo senza cartellino": {"buy_max": 45}, "nuovo con cartellino": {"buy_max": 50}},
+        65, 100, 30,
+        escludi_se=["gilet", "vest", "smanicato", "kids", "bambino"],
     ),
     M(
-        "patagonia_down_sweater", "patagonia", "Down Sweater",
-        "patagonia down sweater",
-        ["down sweater", "patagonia down", "down sweater jacket"],
-        {
-            "ottime": {"auto_buy": 20, "buy_max": 30},
-            "buone": {"buy_max": 25},
-            "nuovo con cartellino": {"buy_max": 40},
-            "nuovo senza cartellino": {"buy_max": 40},
-        },
-        65, 95, 25,
-        escludi_se=["gilet", "vest", "smanicato"],
+        "patagonia_better_sweater", "patagonia", "Better Sweater",
+        "patagonia better sweater",
+        ["better sweater", "better sweater fleece", "patagonia better sweater"],
+        {"ottime": {"auto_buy": 15, "buy_max": 22}, "buone": {"buy_max": 20}, "nuovo senza cartellino": {"buy_max": 28}, "nuovo con cartellino": {"buy_max": 32}},
+        38, 60, 18,
+        escludi_se=["gilet", "vest", "smanicato", "kids", "bambino"],
     ),
     M(
-        "patagonia_nano_puff", "patagonia", "Nano Puff",
-        "patagonia nano puff",
-        ["nano puff", "nano-puff", "patagonia nano"],
-        {
-            "ottime": {"auto_buy": 18, "buy_max": 28},
-            "buone": {"buy_max": 25},
-            "nuovo con cartellino": {"buy_max": 38},
-            "nuovo senza cartellino": {"buy_max": 38},
-        },
-        60, 90, 25,
-        escludi_se=["gilet", "vest", "smanicato"],
+        "patagonia_torrentshell", "patagonia", "Torrentshell",
+        "patagonia torrentshell",
+        ["torrentshell", "torrentshell 3l", "torrentshell 3-l"],
+        {"ottime": {"auto_buy": 30, "buy_max": 40}, "buone": {"buy_max": 35}, "nuovo senza cartellino": {"buy_max": 50}, "nuovo con cartellino": {"buy_max": 60}},
+        80, 120, 30,
+        escludi_se=["pantalone", "pants", "gilet", "vest", "smanicato", "kids", "bambino"],
     ),
     M(
-        "timberland_wheat", "timberland", "Premium 6-Inch Wheat",
-        "timberland premium 6 inch wheat",
-        [
-            "premium 6-inch wheat", "premium 6 inch wheat", "6-inch premium",
-            "6 inch premium", "wheat boot", "wheat premium",
-        ],
-        {
-            "ottime": {"auto_buy": 20, "buy_max": 30},
-            "buone": {"auto_buy": 15, "buy_max": 25},
-            "nuovo": {"buy_max": 40},
-            "nuovo con cartellino": {"buy_max": 45},
-            "nuovo senza cartellino": {"buy_max": 40},
-        },
-        55, 80, 25,
-        taglie_alert_extra=["36", "37", "38"],
-        discrete_eccezione={"buy_max": 18},
+        "barbour_bedale", "barbour", "Bedale",
+        "barbour bedale",
+        ["barbour bedale", "bedale"],
+        {"ottime": {"auto_buy": 25, "buy_max": 40}, "buone": {"auto_buy": 20, "buy_max": 35}, "nuovo senza cartellino": {"buy_max": 55}, "nuovo con cartellino": {"buy_max": 70}},
+        80, 120, 30, taglie_rifiuta=["XS"],
+        escludi_se=["beaufort", "border", "international", "bambino", "kids", "gilet", "vest", "smanicato"],
     ),
     M(
-        "ugg_ultramini", "ugg", "Ultra Mini",
-        "ugg ultra mini",
-        ["ultra mini", "ugg ultra-mini"],
-        {
-            "ottime": {"auto_buy": 20, "buy_max": 30},
-            "buone": {"buy_max": 25},
-            "nuovo senza cartellino": {"buy_max": 40},
-            "nuovo con cartellino": {"buy_max": 45},
-        },
-        55, 80, 25,
-        escludi_se=["kids", "bambino", "bimba", "bimbo"],
+        "barbour_beaufort", "barbour", "Beaufort",
+        "barbour beaufort",
+        ["barbour beaufort", "beaufort"],
+        {"ottime": {"auto_buy": 25, "buy_max": 40}, "buone": {"auto_buy": 20, "buy_max": 35}, "nuovo senza cartellino": {"buy_max": 55}, "nuovo con cartellino": {"buy_max": 70}},
+        80, 120, 30, taglie_rifiuta=["XS"],
+        escludi_se=["bedale", "border", "international", "bambino", "kids", "gilet", "vest", "smanicato"],
     ),
     M(
         "woolrich_arctic", "woolrich", "Arctic Parka",
         "woolrich arctic parka",
-        ["arctic parka", "woolrich arctic", "arctic jacket", "woolrich parka"],
-        {
-            "ottime": {"auto_buy": 25, "buy_max": 35},
-            "buone": {"buy_max": 30},
-            "nuovo senza cartellino": {"buy_max": 45},
-            "nuovo con cartellino": {"buy_max": 60},
-        },
-        70, 105, 25,
-        taglie_rifiuta=["XS"],
-        escludi_se=["bambino", "kids", "gilet", "vest", "smanicato"],
+        ["arctic parka", "woolrich arctic"],
+        {"ottime": {"auto_buy": 25, "buy_max": 35}, "buone": {"buy_max": 30}, "nuovo senza cartellino": {"buy_max": 45}, "nuovo con cartellino": {"buy_max": 60}},
+        70, 105, 25, taglie_rifiuta=["XS"],
+        escludi_se=["arctic jacket", "bambino", "kids", "gilet", "vest", "smanicato"],
+    ),
+    M(
+        "timberland_wheat", "timberland", "Premium 6-Inch Wheat",
+        "timberland premium 6 inch wheat",
+        ["premium 6-inch wheat", "premium 6 inch wheat", "6-inch premium", "6 inch premium", "wheat boot", "wheat premium"],
+        {"ottime": {"auto_buy": 20, "buy_max": 30}, "buone": {"auto_buy": 15, "buy_max": 25}, "nuovo": {"buy_max": 40}, "nuovo con cartellino": {"buy_max": 45}, "nuovo senza cartellino": {"buy_max": 40}},
+        55, 80, 25, taglie_alert_extra=["36", "37", "38"], discrete_eccezione={"buy_max": 18},
+    ),
+    M(
+        "ugg_ultramini", "ugg", "Ultra Mini",
+        "ugg ultra mini",
+        ["ultra mini", "ugg ultra-mini", "ugg classic ultra mini"],
+        {"ottime": {"auto_buy": 20, "buy_max": 30}, "buone": {"buy_max": 25}, "nuovo senza cartellino": {"buy_max": 40}, "nuovo con cartellino": {"buy_max": 45}},
+        55, 80, 25,
+        escludi_se=["kids", "bambino", "bimba", "bimbo"],
     ),
 ]
 
-# Tutti i modelli non presenti sopra sono volutamente fuori strategia.
-MODELLI_RIMOSSI = set()
+# Fuori strategia: modelli meno convincenti per il budget e il profilo di rischio scelto.
+MODELLI_RIMOSSI = {
+    "patagonia_down_sweater",
+    "patagonia_nano_puff",
+}
 
 
 # ================================================================
@@ -1031,6 +982,8 @@ def valuta_item(item):
     freshness = freshness_item(item)
 
     if freshness is None:
+        # Regola rigida: isNew di Apify NON e' un timestamp di creazione Vinted.
+        # Se createdAt/listedAt non e' disponibile o non e' valido, scartiamo.
         stats["freshness_sconosciuto"] += 1
         return None
 
@@ -1182,15 +1135,6 @@ def valuta_item(item):
     ):
         tier = "AUTO-BUY SIGNAL"
 
-    # Stone Island molto economico senza evidenza di codice
-    auth_warning = authenticity_warning(
-        modello_trovato["brand"],
-        descrizione,
-    )
-
-    if auth_warning:
-        tier = "ALERT"
-
     # Taglie extra Timberland: solo AUTO-BUY
     taglie_extra = modello_trovato.get("taglie_alert_extra", [])
 
@@ -1225,8 +1169,8 @@ def valuta_item(item):
         "descrizione": descrizione,
         "iid": str(item.get("id", "")),
         "url": (
-            "https://www.vinted.it/items/"
-            + str(item.get("id", ""))
+            str(item.get("url", "") or "").strip()
+            or "https://www.vinted.it/items/" + str(item.get("id", ""))
         ),
         "foto": (
             (item.get("photo") or {}).get("url", "")
@@ -1234,7 +1178,6 @@ def valuta_item(item):
         ),
         "seller_rischio": seller_rischio,
         "freshness": freshness,
-        "auth_warning": auth_warning,
     }
 
 # ================================================================
@@ -1290,9 +1233,31 @@ def carica_stato():
         gia_visti = OrderedDict()
         blacklist_ids = set()
 
-def salva_visti():
+def salva_visto(iid, ts=None):
+    """Persistenza immediata di un singolo annuncio notificato con successo."""
     try:
-        with sqlite3.connect(STATE_DB_PATH) as conn:
+        iid = str(iid).strip()
+        if not iid:
+            return False
+        ts = float(ts if ts is not None else time.time())
+        with sqlite3.connect(STATE_DB_PATH, timeout=10) as conn:
+            conn.execute("PRAGMA busy_timeout = 10000")
+            conn.execute(
+                "INSERT INTO seen(item_id, notified_at) VALUES(?, ?) "
+                "ON CONFLICT(item_id) DO UPDATE SET notified_at=excluded.notified_at",
+                (iid, ts),
+            )
+            conn.commit()
+        return True
+    except Exception as exc:
+        log.warning("Errore salvataggio singolo visto SQLite: %s", exc)
+        return False
+
+def salva_visti():
+    """Fallback batch per allineare la RAM al database."""
+    try:
+        with sqlite3.connect(STATE_DB_PATH, timeout=10) as conn:
+            conn.execute("PRAGMA busy_timeout = 10000")
             conn.executemany(
                 "INSERT INTO seen(item_id, notified_at) VALUES(?, ?) "
                 "ON CONFLICT(item_id) DO UPDATE SET notified_at=excluded.notified_at",
@@ -1344,195 +1309,228 @@ def remove_blacklist(iid):
 def is_blacklisted(iid):
     return str(iid).strip() in blacklist_ids
 
-carica_stato()
-
 # ================================================================
-# HTTP VINTED - requests only
+# APIFY / VINTED COLLECTOR
 # ================================================================
 
-vinted_session = None
-vinted_session_lock = threading.Lock()
-vinted_session_created = 0.0
-vinted_403_until = 0.0
+apify_403_until = 0.0
 
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/131.0.0.0 Safari/537.36"
-)
+APIFY_API_URL = "https://api.apify.com/v2/acts/{actor}/run-sync-get-dataset-items"
 
 
-def _nuova_sessione_http():
-    """Crea una normale requests.Session e visita prima la homepage.
-
-    Vinted oggi puo' richiedere il cookie access_token_web prima di accettare
-    /api/v2/catalog/items. Non vengono inseriti token/cookie manualmente e non
-    vengono aggirati CAPTCHA o sistemi anti-abuso.
-    """
-    global vinted_session, vinted_session_created
-
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": USER_AGENT,
-        "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Accept-Encoding": "gzip, deflate",
-        "Connection": "keep-alive",
-    })
-
+def _parse_iso_timestamp(raw):
+    if raw is None:
+        return None
     try:
-        response = session.get(
-            "https://www.vinted.it/",
-            timeout=15,
-            allow_redirects=True,
-        )
-        token_cookie = any(
-            c.name == "access_token_web"
-            for c in session.cookies
-        )
-        log.info(
-            "Sessione HTTP Vinted inizializzata | homepage=%s | access_token_web=%s",
-            response.status_code,
-            token_cookie,
-        )
-    except requests.RequestException as exc:
-        log.warning(
-            "Homepage Vinted non raggiunta durante bootstrap sessione: %s",
-            exc,
-        )
-
-    vinted_session = session
-    vinted_session_created = time.time()
-    return session
+        if isinstance(raw, (int, float)):
+            ts = float(raw)
+            if ts > 1e11:
+                ts /= 1000.0
+            return ts if ts > 0 else None
+        value = str(raw).strip()
+        if not value:
+            return None
+        try:
+            ts = float(value)
+            if ts > 1e11:
+                ts /= 1000.0
+            return ts if ts > 0 else None
+        except ValueError:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return None
 
 
-def get_vinted_session(force_refresh=False):
-    global vinted_session, vinted_session_created
+def normalizza_item_apify(row):
+    """Adatta i record Apify al formato interno del vecchio bot."""
+    if not isinstance(row, dict):
+        return None
 
-    with vinted_session_lock:
-        if (
-            force_refresh
-            or vinted_session is None
-            or time.time() - vinted_session_created >= 300
-        ):
-            return _nuova_sessione_http()
-        return vinted_session
+    # Crawler/monitor actors possono usare nomi diversi.
+    iid = row.get("itemId") or row.get("id") or row.get("productId")
+    title = row.get("title") or row.get("display_title") or ""
+    url = row.get("url") or row.get("itemUrl") or row.get("canonicalUrl") or ""
+    brand = row.get("brand") or row.get("brandTitle") or row.get("brand_title") or ""
+    size = row.get("size") or row.get("sizeTitle") or row.get("size_title") or ""
+    condition = row.get("condition") or row.get("status") or ""
+    description = row.get("description") or ""
 
+    price = row.get("price")
+    if isinstance(price, dict):
+        price = price.get("amount")
+    if price is None:
+        price = row.get("priceAmount")
+    if price is None:
+        price = row.get("price_amount")
 
-async def crea_sessione_vinted():
-    """Prepara la sessione HTTP Vinted senza browser."""
-    return await asyncio.to_thread(get_vinted_session)
+    photos = row.get("photos") or []
+    if not isinstance(photos, list):
+        photos = []
+    photo_url = row.get("photoUrl") or row.get("imageUrl") or row.get("photo_url") or ""
+    if not photo_url and photos:
+        photo_url = str(photos[0] or "")
+
+    seller = {
+        "feedback_count": row.get("sellerFeedbackCount"),
+        "feedback_reputation": row.get("sellerFeedbackReputation") or row.get("sellerRating"),
+        "item_count": row.get("sellerItemCount"),
+    }
+
+    created = (
+        row.get("createdAt")
+        or row.get("listedAt")
+        or row.get("created_at")
+        or row.get("created_at_ts")
+    )
+    is_new = bool(row.get("isNew", False))
+
+    normalized = {
+        "id": str(iid or "").strip(),
+        "title": str(title or ""),
+        "description": str(description or ""),
+        "brand_title": str(brand or ""),
+        "size_title": str(size or ""),
+        "status": str(condition or ""),
+        "price": {"amount": price},
+        "photo": {"url": str(photo_url or "")},
+        "user": seller,
+        "url": str(url or ""),
+        "created_at": created,
+        "created_at_ts": _parse_iso_timestamp(created),
+        "_apify_is_new": is_new,
+        "_apify_scraped_at": row.get("scrapedAt"),
+    }
+
+    if not normalized["url"] and normalized["id"]:
+        normalized["url"] = f"https://www.vinted.it/items/{normalized['id']}"
+
+    return normalized
 
 
 async def chiudi_sessione_vinted():
-    global vinted_session
-    with vinted_session_lock:
-        try:
-            if vinted_session is not None:
-                vinted_session.close()
-        except Exception:
-            pass
-        vinted_session = None
+    """Compatibilita' con l'architettura precedente: non c'e' sessione locale da chiudere."""
+    return None
 
 
-async def vinted_catalog_http(session, query):
-    """Cerca nel catalogo usando la sessione HTTP bootstrapata dalla homepage."""
-    global vinted_403_until
+async def crea_sessione_vinted():
+    """Verifica solo la configurazione Apify; il collector e' remoto."""
+    if not APIFY_API_TOKEN:
+        log.error("Manca APIFY_API_TOKEN nelle Environment Variables di Render.")
+        return False
+    log.info(
+        "Collector Apify pronto | actor=%s | market=%s | max_items=%s | monitor=%s",
+        APIFY_ACTOR_ID,
+        APIFY_DOMAIN,
+        APIFY_MAX_ITEMS,
+        APIFY_MONITOR_MODE,
+    )
+    return True
 
-    if time.time() < vinted_403_until:
+
+async def apify_catalog(query_list):
+    """Esegue una sola run Apify per piu' query Vinted."""
+    global apify_403_until
+
+    if not APIFY_API_TOKEN:
+        stats["errori_http"] += 1
         return None
 
-    params = {
-        "search_text": query,
+    if time.time() < apify_403_until:
+        return None
+
+    queries = [q for q in query_list if q]
+    if not queries:
+        return []
+
+    # Il collector deve coprire sempre il buy-max piu' alto dei modelli.
+    # +10 EUR lascia margine per future modifiche ai modelli; il filtro
+    # definitivo resta comunque buy_max dentro valuta_item().
+    buy_ceiling = max(
+        safe_float(block.get("buy_max"))
+        for modello in MODELLI
+        for block in modello.get("condizioni", {}).values()
+        if block.get("buy_max") is not None
+    )
+    collector_max_price = max(APIFY_MAX_PRICE, buy_ceiling + 10)
+
+    payload = {
+        "searchTerms": queries,
+        "domain": APIFY_DOMAIN,
+        "maxItems": APIFY_MAX_ITEMS,
         "order": "newest_first",
-        "per_page": 20,
-        "page": 1,
+        "maxPrice": collector_max_price,
+        "monitorMode": APIFY_MONITOR_MODE,
+        "emitExisting": APIFY_EMIT_EXISTING,
+        "checkInterval": 0,
     }
 
+    url = APIFY_API_URL.format(
+        actor=urllib.parse.quote(APIFY_ACTOR_ID.replace("/", "~"), safe="~")
+    )
     headers = {
-        "User-Agent": USER_AGENT,
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Referer": "https://www.vinted.it/",
+        "Authorization": f"Bearer {APIFY_API_TOKEN}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": "VintedResellBot/Final-2026",
     }
 
-    for tentativo in range(2):
-        try:
-            response = await asyncio.to_thread(
-                session.get,
-                "https://www.vinted.it/api/v2/catalog/items",
-                params=params,
-                headers=headers,
-                timeout=15,
-            )
-        except requests.RequestException as exc:
-            stats["errori_http"] += 1
-            log.warning(
-                "Errore HTTP Vinted per '%s': %s",
-                query,
-                exc,
-            )
-            return None
-
-        if response.status_code == 200:
-            try:
-                data = response.json()
-            except ValueError:
-                stats["errori_http"] += 1
-                log.warning(
-                    "Risposta non JSON per '%s': %s",
-                    query,
-                    response.text[:160].replace("\\n", " "),
-                )
-                return None
-
-            if isinstance(data, dict):
-                return data
-            return None
-
-        if response.status_code == 401 and tentativo == 0:
-            log.warning(
-                "Vinted HTTP 401 per '%s': rinnovo normale della sessione.",
-                query,
-            )
-            session = await asyncio.to_thread(
-                get_vinted_session,
-                True,
-            )
-            continue
-
-        if response.status_code == 403:
-            stats["http_403"] += 1
-            vinted_403_until = time.time() + VINTED_403_COOLDOWN
-            log.error(
-                "Vinted HTTP 403 per '%s': pausa %ss; nessun bypass.",
-                query,
-                VINTED_403_COOLDOWN,
-            )
-            return None
-
-        if response.status_code == 429:
-            stats["rate_limit"] += 1
-            retry_after = response.headers.get("Retry-After")
-            try:
-                delay = min(max(float(retry_after), 2.0), 30.0)
-            except (TypeError, ValueError):
-                delay = 5.0
-            log.warning(
-                "Vinted HTTP 429 per '%s': attendo %.1fs.",
-                query,
-                delay,
-            )
-            await asyncio.sleep(delay)
-            return None
-
+    try:
+        response = await asyncio.to_thread(
+            requests.post,
+            url,
+            json=payload,
+            headers=headers,
+            timeout=APIFY_TIMEOUT_SECONDS,
+        )
+    except requests.RequestException as exc:
         stats["errori_http"] += 1
-        log.warning(
-            "HTTP %s su Vinted per query '%s'.",
+        log.warning("Errore collegamento Apify: %s", exc)
+        return None
+
+    if response.status_code == 200:
+        try:
+            data = response.json()
+        except ValueError:
+            stats["errori_http"] += 1
+            log.warning("Apify ha restituito una risposta non JSON.")
+            return None
+
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            return data.get("items", [])
+        return []
+
+    if response.status_code in (401, 403):
+        stats["http_403"] += 1
+        apify_403_until = time.time() + 300
+        log.error(
+            "Apify HTTP %s: controlla APIFY_API_TOKEN e permessi. Pausa 300s.",
             response.status_code,
-            query,
         )
         return None
 
+    if response.status_code == 402:
+        stats["errori_http"] += 1
+        log.error("Apify HTTP 402: credito/limite di utilizzo insufficiente.")
+        return None
+
+    if response.status_code == 408:
+        stats["errori_http"] += 1
+        log.warning("Apify timeout HTTP 408: run troppo lunga.")
+        return None
+
+    if response.status_code == 429:
+        stats["rate_limit"] += 1
+        log.warning("Apify HTTP 429: rate limit.")
+        return None
+
+    stats["errori_http"] += 1
+    log.warning(
+        "Apify HTTP %s: %s",
+        response.status_code,
+        response.text[:250].replace("\n", " "),
+    )
     return None
 
 # ================================================================
@@ -1540,26 +1538,24 @@ async def vinted_catalog_http(session, query):
 # ================================================================
 
 QUERY_FISSE = [
-    "the north face nuptse",
-    "carhartt wip detroit",
-    "the north face denali",
+    "the north face 1996 retro nuptse",
+    "carhartt wip detroit jacket",
+    "the north face denali fleece",
+    "patagonia synchilla",
+    "patagonia retro x",
+    "patagonia better sweater",
+    "patagonia torrentshell",
     "barbour bedale",
     "barbour beaufort",
-]
-
-QUERY_SECONDARIE = [
-    "patagonia retro x",
-    "patagonia down sweater",
-    "patagonia nano puff",
+    "woolrich arctic parka",
     "timberland premium 6 inch wheat",
     "ugg ultra mini",
-    "woolrich arctic parka",
 ]
 
-query_next_due = {
-    query: 0.0
-    for query in QUERY_SECONDARIE
-}
+QUERY_SECONDARIE = []
+
+# Un solo sweep remoto: niente 10 Actor separati.
+QUERY_APIFY = list(dict.fromkeys(QUERY_FISSE + QUERY_SECONDARIE))
 
 nuovi_dal_salvataggio = 0
 cicli_dal_salvataggio = 0
@@ -1631,10 +1627,7 @@ async def invia_notifica(res):
         f"**Freshness:** "
         f"{round(res['freshness'])} sec\n\n"
         "Controlla sempre foto, etichette, codici "
-        "e autenticita' prima di comprare.\n"
-        + ("⚠️ AUTENTICITÀ DA VERIFICARE: manca evidenza CLG/QR.\n"
-           if res.get("auth_warning") else "")
-        + "\n"
+        "e autenticita' prima di comprare.\n\n"
         + f"[VAI ALL'ANNUNCIO]({res['url']})"
     )
 
@@ -1677,79 +1670,58 @@ async def invia_notifica(res):
 # SCANSIONE
 # ================================================================
 
-async def scansione_query(
-    session,
-    query,
-):
+async def scansione_items(items):
     global ultimo_affare
     global nuovi_dal_salvataggio
 
-    data = await vinted_catalog_http(session, query)
-
-    if data is None:
-        return
-
-    items = data.get("items", [])
-
-    if not isinstance(items, list):
-        return
-
-    # Evita doppio processing nello stesso risultato/ciclo,
-    # senza trasformare ogni item in "visto" prima dei filtri.
     ciclo_processati = set()
 
-    for item in items:
-        if not isinstance(item, dict):
+    for raw_item in items:
+        item = normalizza_item_apify(raw_item)
+        if not item:
             continue
 
         iid = str(item.get("id", ""))
-
-        if not iid:
+        if not iid or iid in ciclo_processati:
             continue
-
-        if iid in ciclo_processati:
-            continue
-
         ciclo_processati.add(iid)
 
-        # gia_visti = notificati con successo.
         if iid in gia_visti:
             stats["duplicati"] += 1
             continue
 
         stats["scaricati"] += 1
 
-        # Freshness rigorosa prima di tutto.
-        freshness = freshness_item(item)
-
-        if freshness is None:
-            stats["freshness_sconosciuto"] += 1
-            continue
-
-        if freshness > cfg_runtime["max_secondi_freschezza"]:
-            stats["freshness_no"] += 1
-            continue
-
         if is_blacklisted(iid):
             continue
 
         risultato = valuta_item(item)
-
         if not risultato:
             continue
 
-        # NON segnare come visto prima della notifica.
-        notificato = await invia_notifica(
-            risultato
-        )
+        notificato = False
+        for tentativo in range(3):
+            notificato = await invia_notifica(risultato)
+            if notificato:
+                break
+            if tentativo < 2:
+                await asyncio.sleep(1.0)
 
         if not notificato:
+            # Non salviamo localmente l'annuncio come notificato.
+            # In monitor mode Apify puo' comunque averlo marcato remoto;
+            # per questo ritentiamo subito nello stesso sweep invece di
+            # considerare l'errore definitivamente recuperato.
             continue
 
-        gia_visti[iid] = time.time()
-
+        notified_ts = time.time()
+        gia_visti[iid] = notified_ts
         while len(gia_visti) > 10000:
             gia_visti.popitem(last=False)
+
+        # Persistenza immediata: se Render riavvia subito dopo l'alert,
+        # l'annuncio non viene perso dal database locale.
+        await asyncio.to_thread(salva_visto, iid, notified_ts)
 
         ultimo_affare = {
             "titolo": risultato["titolo"],
@@ -1762,7 +1734,6 @@ async def scansione_query(
             "titolo": risultato["titolo"],
             "ts": time.time(),
         }
-
         while len(affari_recenti) > 200:
             affari_recenti.popitem(last=False)
 
@@ -1772,8 +1743,8 @@ async def scansione_query(
             stats["alert"] += 1
 
         nuovi_dal_salvataggio += 1
+        await asyncio.sleep(0.3)
 
-        await asyncio.sleep(0.5)
 
 async def controllo_vinted():
     global nuovi_dal_salvataggio
@@ -1783,74 +1754,35 @@ async def controllo_vinted():
         return
 
     async with scanner_lock:
-        session = await crea_sessione_vinted()
-        now = time.time()
-
-        secondarie_due = [
-            query
-            for query, due in query_next_due.items()
-            if due <= now
-        ]
-
-        # Mantiene sempre le fisse + le secondarie che sono realmente dovute.
-        # Se nessuna secondaria e' dovuta, ne prende una per non lasciare
-        # completamente ferme le query meno frequenti.
-        if not secondarie_due:
-            secondarie_due = [
-                min(
-                    query_next_due,
-                    key=query_next_due.get,
-                )
-            ]
-
-        queries = QUERY_FISSE + secondarie_due
+        if not await crea_sessione_vinted():
+            return
 
         log.info(
-            "Nuovo ciclo: %s query",
-            len(queries),
+            "Nuovo sweep Apify | %s query | max_items=%s",
+            len(QUERY_APIFY),
+            APIFY_MAX_ITEMS,
         )
 
-        for query in queries:
-            try:
-                await scansione_query(
-                    session,
-                    query,
-                )
-            except Exception as exc:
-                log.exception(
-                    "Errore query '%s': %s",
-                    query,
-                    exc,
-                )
+        data = await apify_catalog(QUERY_APIFY)
+        if data is None:
+            return
 
-            # Pacing normale: non e' un bypass del rate limiting.
-            await asyncio.sleep(1.2)
+        if not isinstance(data, list):
+            return
 
-            if query in query_next_due:
-                # Ogni secondaria torna dovuta entro una finestra controllata.
-                query_next_due[query] = (
-                    time.time()
-                    + max(
-                        60,
-                        cfg_runtime["scan_interval"]
-                        * max(1, len(QUERY_SECONDARIE) // 2),
-                    )
-                )
+        await scansione_items(data)
 
         cicli_dal_salvataggio += 1
-
-        if (
-            nuovi_dal_salvataggio >= 10
-            or cicli_dal_salvataggio >= 10
-        ):
-            salva_visti()
+        if nuovi_dal_salvataggio >= 10 or cicli_dal_salvataggio >= 3:
+            await asyncio.to_thread(salva_visti)
             nuovi_dal_salvataggio = 0
             cicli_dal_salvataggio = 0
 
         log.info(
-            "Ciclo completato | notificati=%s | 403=%s",
+            "Sweep completato | record=%s | notificati=%s | errori=%s",
+            len(data),
             len(gia_visti),
-            stats["http_403"],
+            stats["errori_http"],
         )
 
 async def scanner_loop():
@@ -1907,7 +1839,7 @@ async def report_loop():
                 f"Freshness scaduta: {stats['freshness_no']}\n"
                 f"Duplicati: {stats['duplicati']}\n"
                 f"Rate limit: {stats['rate_limit']}\n"
-                f"403: {stats['http_403']}\n"
+                f"Apify 403: {stats['http_403']}\n"
                 f"Errori HTTP: {stats['errori_http']}\n"
                 f"Notifiche fallite: {stats['notifiche_fallite']}\n"
                 f"Notificati totali: {len(gia_visti)}"
@@ -1987,7 +1919,9 @@ async def config(ctx):
         f"scan interval = {cfg_runtime['scan_interval']} sec\n"
         f"freshness massima = 180 sec\n"
         f"ping = {PING_MODE}\n"
-        f"403 cooldown = {VINTED_403_COOLDOWN} sec\n"
+        f"Apify actor = {APIFY_ACTOR_ID}\n"
+        f"Apify max items = {APIFY_MAX_ITEMS}\n"
+        f"Apify monitor = {APIFY_MONITOR_MODE}\n"
         f"seller costi = {SELLER_COST_RATE:.2%} + {SELLER_FIXED_COST:.2f} EUR\n"
         f"database = {STATE_DB_PATH}\n"
         f"blacklist ID = {len(blacklist_ids)}\n"
@@ -2240,7 +2174,7 @@ app = Flask(__name__)
 @app.route("/")
 def home():
     return (
-        "Vinted Resell Bot FINAL HTTP online",
+        "Vinted Resell Bot FINAL APIFY online",
         200,
     )
 
@@ -2254,7 +2188,7 @@ def health():
         "scan_interval": cfg_runtime["scan_interval"],
         "freshness": cfg_runtime["max_secondi_freschezza"],
         "http_403": stats["http_403"],
-        "vinted_403_cooldown": max(0, round(vinted_403_until - time.time())),
+        "apify_403_cooldown": max(0, round(apify_403_until - time.time())),
         "ping_mode": PING_MODE,
         "blacklist_ids": len(blacklist_ids),
     }), 200
@@ -2298,10 +2232,14 @@ def main():
     ).start()
 
     log.info(
-        "Avvio Vinted Resell Bot FINAL HTTP 2026..."
+        "Avvio Vinted Resell Bot FINAL APIFY MONITOR 2026..."
     )
 
-    bot.run(TOKEN)
+    try:
+        bot.run(TOKEN)
+    finally:
+        # Ultimo flush anche in caso di shutdown normale/errore.
+        salva_visti()
 
 if __name__ == "__main__":
     main()
