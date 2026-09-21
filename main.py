@@ -1,4 +1,5 @@
-# BOT VINTED RESELL V5.2 FINAL GITHUB
+# BOT VINTED RESELL — FINAL HTTP 2026
+# Basato sulla logica del vecchio bot funzionante, con i 10 modelli strategici attuali.
 # WINTER STRATEGY: selected models, controlled buy ceilings, low fake/capital risk.
 # NO luxury/high-counterfeit targets; no auto-purchase is performed by the bot.
 # Scanner Discord + filtri + scoring + notifiche.
@@ -1374,7 +1375,7 @@ def _nuova_sessione_http():
     session.headers.update({
         "User-Agent": USER_AGENT,
         "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Accept-Encoding": "gzip, deflate, br",
+        "Accept-Encoding": "gzip, deflate",
         "Connection": "keep-alive",
     })
 
@@ -2239,7 +2240,7 @@ app = Flask(__name__)
 @app.route("/")
 def home():
     return (
-        "Vinted Resell Bot V5.3 HTTP online",
+        "Vinted Resell Bot FINAL HTTP online",
         200,
     )
 
@@ -2297,7 +2298,7 @@ def main():
     ).start()
 
     log.info(
-        "Avvio Vinted Resell Bot V5.3 HTTP..."
+        "Avvio Vinted Resell Bot FINAL HTTP 2026..."
     )
 
     bot.run(TOKEN)
